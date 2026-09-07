@@ -67,11 +67,21 @@ class HamsterSoccerApp:
         self.aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_ARUCO_ORIGINAL)
         try:
             self.aruco_params = aruco.DetectorParameters()
-            self.aruco_detector = aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
             self.is_new_cv2 = True
         except AttributeError:
             self.aruco_params = aruco.DetectorParameters_create()
             self.is_new_cv2 = False
+
+        # 마커가 카메라와 거리가 다르거나 각도가 기울어져도 잡히도록 임계값 탐색 범위를 넓힘
+        # (기본값 max=23 은 카메라에 가까이 있는 큰 마커를 놓치기 쉬움)
+        self.aruco_params.adaptiveThreshWinSizeMin = 3
+        self.aruco_params.adaptiveThreshWinSizeMax = 53
+        self.aruco_params.adaptiveThreshWinSizeStep = 4
+        self.aruco_params.minMarkerPerimeterRate = 0.02
+        self.aruco_params.cornerRefinementMethod = aruco.CORNER_REFINE_SUBPIX
+
+        if self.is_new_cv2:
+            self.aruco_detector = aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
 
         self.setup_ui()
         self.update_frame()
@@ -361,6 +371,13 @@ class HamsterSoccerApp:
             self.detected_status['r2'] = False
 
             if ids is not None:
+                # 디버그용: 이번 프레임에 실제로 잡힌 마커 ID 전체를 화면에 표시.
+                # "마커가 인식이 안 된다"는 문제를 (a) 아예 안 잡히는 경우와
+                # (b) 다른 ID로 잡히는 경우(마커 인쇄/딕셔너리 불일치)로 구분하는 데 사용.
+                detected_ids = sorted(int(v) for v in ids.flatten())
+                cv2.putText(frame, f"Detected marker IDs: {detected_ids}", (30, 80),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
                 for i, marker_id in enumerate(ids.flatten()):
                     c = corners[i][0]
                     cx = int(np.mean(c[:, 0]))
@@ -373,6 +390,8 @@ class HamsterSoccerApp:
 
                     cv2.polylines(frame, [c.astype(np.int32)], True, (0, 255, 0), 2)
                     cv2.arrowedLine(frame, (cx, cy), (int(front_x), int(front_y)), (0, 0, 255), 3, tipLength=0.3)
+                    cv2.putText(frame, f"ID:{int(marker_id)}", (cx - 15, cy + 35),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
 
                     if marker_id == 0:
                         r1_data = (cx, cy, angle)
@@ -382,6 +401,9 @@ class HamsterSoccerApp:
                         r2_data = (cx, cy, angle)
                         self.detected_status['r2'] = True
                         cv2.putText(frame, "R2 (ID1)", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+            else:
+                cv2.putText(frame, "NO ARUCO MARKERS DETECTED", (30, 80),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
             self.update_status_indicators()
 
