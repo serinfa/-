@@ -12,6 +12,7 @@ class HamsterSoccerApp:
         self.root = root
         self.root.title("햄스터봇 AI 로봇축구 (아루코 마커 추적 모드)")
         self.root.geometry("1100x780")
+        self.root.minsize(1000, 700)
         self.root.configure(bg="white")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -20,6 +21,8 @@ class HamsterSoccerApp:
         self.title_font = font.Font(family="맑은 고딕", size=20, weight="bold")
         self.score_font = font.Font(family="맑은 고딕", size=32, weight="bold")
         self.btn_font = font.Font(family="맑은 고딕", size=12, weight="bold")
+        self.section_font = font.Font(family="맑은 고딕", size=11, weight="bold")
+        self.status_font = font.Font(family="맑은 고딕", size=12, weight="bold")
 
         self.is_playing = False
         self.game_time_minutes = 3
@@ -73,48 +76,72 @@ class HamsterSoccerApp:
         self.setup_ui()
         self.update_frame()
 
+    def _section_frame(self, parent, title):
+        """상단 제어 영역에서 기능별로 묶어 보여줄 그룹 박스."""
+        frame = tk.LabelFrame(parent, text=title, bg="white", fg=self.bg_color,
+                               font=self.section_font, padx=12, pady=8,
+                               relief="groove", bd=2)
+        return frame
+
     def setup_ui(self):
         top_frame = tk.Frame(self.root, bg="white")
         top_frame.pack(fill="x", pady=15, padx=20)
+        # 중앙(타이머/스코어) 칸만 창 너비에 맞춰 늘어나고 나머지는 내용 크기 유지
+        for col, weight in ((0, 0), (1, 0), (2, 1), (3, 0)):
+            top_frame.grid_columnconfigure(col, weight=weight)
 
-        # 1. 시작/시간 버튼 [수정: relief="raised", bd=4 를 적용하여 볼록한 버튼으로 변경]
-        left_frame = tk.Frame(top_frame, bg="white")
-        left_frame.pack(side="left")
-        self.btn_start = tk.Button(left_frame, text="시작", bg=self.bg_color, fg=self.text_color,
+        # 1. 경기 제어 (시작/정지, 시간 설정)
+        game_frame = self._section_frame(top_frame, "경기 제어")
+        game_frame.grid(row=0, column=0, sticky="ns", padx=(0, 10))
+        self.btn_start = tk.Button(game_frame, text="시작", bg=self.bg_color, fg=self.text_color,
                                    font=self.btn_font, width=12, height=2, relief="raised", bd=4, command=self.toggle_play)
         self.btn_start.pack(pady=3)
-        tk.Button(left_frame, text="시간 설정", bg=self.bg_color, fg=self.text_color,
+        tk.Button(game_frame, text="시간 설정", bg=self.bg_color, fg=self.text_color,
                   font=self.btn_font, width=12, relief="raised", bd=3, command=self.set_time).pack(pady=3)
 
-        # 2. 로봇 선택 라디오 버튼 영역
-        mode_frame = tk.Frame(top_frame, bg="white", highlightbackground=self.bg_color, highlightthickness=2, padx=10, pady=5)
-        mode_frame.pack(side="left", padx=15)
-        tk.Label(mode_frame, text="동작 로봇 선택", bg="white", font=font.Font(family="맑은 고딕", size=10, weight="bold")).pack(anchor="w")
-        tk.Radiobutton(mode_frame, text="1번 (ID 0) 로봇만", variable=self.active_mode, value="r1", bg="white").pack(anchor="w")
-        tk.Radiobutton(mode_frame, text="2번 (ID 1) 로봇만", variable=self.active_mode, value="r2", bg="white").pack(anchor="w")
-        tk.Radiobutton(mode_frame, text="두 대 모두 동작", variable=self.active_mode, value="both", bg="white").pack(anchor="w")
+        # 2. 로봇 설정 (동작 로봇 선택, 속도, 색상 보정)
+        robot_frame = self._section_frame(top_frame, "로봇 설정")
+        robot_frame.grid(row=0, column=1, sticky="ns", padx=10)
+        mode_sub = tk.Frame(robot_frame, bg="white")
+        mode_sub.pack(anchor="w", pady=(0, 6))
+        tk.Radiobutton(mode_sub, text="1번(ID0)만", variable=self.active_mode, value="r1", bg="white").pack(anchor="w")
+        tk.Radiobutton(mode_sub, text="2번(ID1)만", variable=self.active_mode, value="r2", bg="white").pack(anchor="w")
+        tk.Radiobutton(mode_sub, text="두 대 모두", variable=self.active_mode, value="both", bg="white").pack(anchor="w")
+        tk.Button(robot_frame, text="속도 조절", bg=self.bg_color, fg=self.text_color,
+                  font=self.btn_font, width=16, relief="raised", bd=3, command=self.set_speed).pack(pady=3, fill="x")
+        self.btn_calibrate = tk.Button(robot_frame, text="공 색상 보정(영상 클릭)", bg=self.bg_color, fg=self.text_color,
+                                        font=self.btn_font, width=16, relief="raised", bd=3, command=self.start_calibration)
+        self.btn_calibrate.pack(pady=3, fill="x")
 
-        # 3. 중앙 타이머 및 점수
+        # 3. 중앙 타이머 및 점수 (남는 폭을 모두 차지)
         center_frame = tk.Frame(top_frame, bg=self.bg_color, padx=30, pady=10, relief="sunken", bd=2)
-        center_frame.pack(side="left", expand=True)
+        center_frame.grid(row=0, column=2, sticky="nsew", padx=10)
         self.timer_label = tk.Label(center_frame, text="남은 시간 03:00", bg=self.bg_color, fg="yellow", font=self.title_font)
         self.timer_label.pack()
         tk.Label(center_frame, text="AI   0 : 0   Player", bg=self.bg_color, fg=self.text_color, font=self.score_font).pack(pady=(5, 0))
 
-        # 4. 속도 조절 및 상태 확인 [수정: relief="raised", bd=3 를 적용하여 볼록한 버튼으로 변경]
-        right_frame = tk.Frame(top_frame, bg="white")
-        right_frame.pack(side="right")
-        tk.Button(right_frame, text="속도 조절", bg=self.bg_color, fg=self.text_color,
-                  font=self.btn_font, width=20, relief="raised", bd=3, command=self.set_speed).pack(pady=3)
-        self.btn_calibrate = tk.Button(right_frame, text="공 색상 보정 (영상 클릭)", bg=self.bg_color, fg=self.text_color,
-                                        font=self.btn_font, width=20, relief="raised", bd=3, command=self.start_calibration)
-        self.btn_calibrate.pack(pady=3)
-        tk.Button(right_frame, text="연결 및 인식상태 확인", bg=self.bg_color, fg=self.text_color,
-                  font=self.btn_font, width=20, height=2, relief="raised", bd=4, command=self.check_status).pack(pady=3)
+        # 4. 인식 상태 (실시간 상태등 + 하드웨어 점검)
+        status_frame = self._section_frame(top_frame, "인식 상태")
+        status_frame.grid(row=0, column=3, sticky="ns", padx=(10, 0))
+        self.status_labels = {}
+        for key, label_text in (("ball", "축구공(노랑)"), ("r1", "로봇 1 (ID0)"), ("r2", "로봇 2 (ID1)")):
+            row = tk.Frame(status_frame, bg="white")
+            row.pack(anchor="w", fill="x", pady=1)
+            tk.Label(row, text=label_text, bg="white", font=self.status_font, width=11, anchor="w").pack(side="left")
+            dot = tk.Label(row, text="● 미인식", bg="white", fg="#e74c3c", font=self.status_font)
+            dot.pack(side="left")
+            self.status_labels[key] = dot
+        tk.Button(status_frame, text="연결/하드웨어 점검", bg=self.bg_color, fg=self.text_color,
+                  font=self.btn_font, width=16, relief="raised", bd=3, command=self.check_status).pack(pady=(8, 0), fill="x")
 
         self.video_label = tk.Label(self.root, bg=self.bg_color)
         self.video_label.pack(fill="both", expand=True, padx=20, pady=(0, 20))
         self.video_label.bind("<Button-1>", self.on_video_click)
+
+    def update_status_indicators(self):
+        for key, label in self.status_labels.items():
+            ok = self.detected_status[key]
+            label.config(text="● 인식됨" if ok else "● 미인식", fg=("#2ecc71" if ok else "#e74c3c"))
 
     def set_speed(self):
         val = simpledialog.askinteger("속도 조절", "로봇의 직진 속도를 입력하세요 (10~100):", minvalue=10, maxvalue=100, initialvalue=self.base_speed)
@@ -355,6 +382,8 @@ class HamsterSoccerApp:
                         r2_data = (cx, cy, angle)
                         self.detected_status['r2'] = True
                         cv2.putText(frame, "R2 (ID1)", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+
+            self.update_status_indicators()
 
             # --- 자율 주행 실행부 ---
             if self.is_playing:
