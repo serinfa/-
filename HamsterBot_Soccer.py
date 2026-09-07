@@ -79,6 +79,13 @@ class HamsterSoccerApp:
         self.aruco_params.adaptiveThreshWinSizeStep = 4
         self.aruco_params.minMarkerPerimeterRate = 0.02
         self.aruco_params.cornerRefinementMethod = aruco.CORNER_REFINE_SUBPIX
+        # 완전히 안 잡히는(후보로도 안 걸리는) 마커를 위한 추가 완화:
+        # 기울어진 각도/블러/조명 얼룩으로 정사각형 윤곽이 살짝 틀어지거나
+        # 테두리 셀 일부가 오염돼도 후보로 살아남도록 허용 폭을 넓힘.
+        self.aruco_params.polygonalApproxAccuracyRate = 0.06
+        self.aruco_params.maxErroneousBitsInBorderRate = 0.5
+        self.aruco_params.perspectiveRemoveIgnoredMarginPerCell = 0.20
+        self.aruco_params.minOtsuStdDev = 3.0
 
         if self.is_new_cv2:
             self.aruco_detector = aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
