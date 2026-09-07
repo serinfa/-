@@ -33,6 +33,10 @@ class HamsterSoccerApp:
 
         self.detected_status = {'ball': False, 'r1': False, 'r2': False}
 
+        # 로봇에 실제로 부착된 아루코 마커 ID. 카메라 화면의 "Detected marker IDs"
+        # 표시로 확인한 실제 값으로 맞춰야 함 (라벨을 다시 인쇄할 필요 없음).
+        self.robot_marker_ids = {'r1': 0, 'r2': 3}
+
         self.active_mode = tk.StringVar(value="both")
 
         self.h1, self.h2 = None, None
@@ -121,8 +125,8 @@ class HamsterSoccerApp:
         robot_frame.grid(row=0, column=1, sticky="ns", padx=10)
         mode_sub = tk.Frame(robot_frame, bg="white")
         mode_sub.pack(anchor="w", pady=(0, 6))
-        tk.Radiobutton(mode_sub, text="1번(ID0)만", variable=self.active_mode, value="r1", bg="white").pack(anchor="w")
-        tk.Radiobutton(mode_sub, text="2번(ID1)만", variable=self.active_mode, value="r2", bg="white").pack(anchor="w")
+        tk.Radiobutton(mode_sub, text=f"1번(ID{self.robot_marker_ids['r1']})만", variable=self.active_mode, value="r1", bg="white").pack(anchor="w")
+        tk.Radiobutton(mode_sub, text=f"2번(ID{self.robot_marker_ids['r2']})만", variable=self.active_mode, value="r2", bg="white").pack(anchor="w")
         tk.Radiobutton(mode_sub, text="두 대 모두", variable=self.active_mode, value="both", bg="white").pack(anchor="w")
         tk.Button(robot_frame, text="속도 조절", bg=self.bg_color, fg=self.text_color,
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.set_speed).pack(pady=3, fill="x")
@@ -141,7 +145,12 @@ class HamsterSoccerApp:
         status_frame = self._section_frame(top_frame, "인식 상태")
         status_frame.grid(row=0, column=3, sticky="ns", padx=(10, 0))
         self.status_labels = {}
-        for key, label_text in (("ball", "축구공(노랑)"), ("r1", "로봇 1 (ID0)"), ("r2", "로봇 2 (ID1)")):
+        status_texts = (
+            ("ball", "축구공(노랑)"),
+            ("r1", f"로봇 1 (ID{self.robot_marker_ids['r1']})"),
+            ("r2", f"로봇 2 (ID{self.robot_marker_ids['r2']})"),
+        )
+        for key, label_text in status_texts:
             row = tk.Frame(status_frame, bg="white")
             row.pack(anchor="w", fill="x", pady=1)
             tk.Label(row, text=label_text, bg="white", font=self.status_font, width=11, anchor="w").pack(side="left")
@@ -232,8 +241,8 @@ class HamsterSoccerApp:
             self.h2.buzzer(1000); wait(100); self.h2.buzzer(0)
 
         b_st = "✅" if self.detected_status['ball'] else "❌"
-        r1_st = "✅" if self.detected_status['r1'] else "❌ (ID 0 마커)"
-        r2_st = "✅" if self.detected_status['r2'] else "❌ (ID 1 마커)"
+        r1_st = "✅" if self.detected_status['r1'] else f"❌ (ID {self.robot_marker_ids['r1']} 마커)"
+        r2_st = "✅" if self.detected_status['r2'] else f"❌ (ID {self.robot_marker_ids['r2']} 마커)"
 
         msg = f"[ 하드웨어 통신 ]\n햄스터봇: {hw_status}\n\n[ 추적 상태 ]\n축구공(노랑): {b_st}\n로봇 1번: {r1_st}\n로봇 2번: {r2_st}"
         messagebox.showinfo("시스템 점검", msg)
@@ -400,14 +409,14 @@ class HamsterSoccerApp:
                     cv2.putText(frame, f"ID:{int(marker_id)}", (cx - 15, cy + 35),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
 
-                    if marker_id == 0:
+                    if marker_id == self.robot_marker_ids['r1']:
                         r1_data = (cx, cy, angle)
                         self.detected_status['r1'] = True
-                        cv2.putText(frame, "R1 (ID0)", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
-                    elif marker_id == 1:
+                        cv2.putText(frame, f"R1 (ID{self.robot_marker_ids['r1']})", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+                    elif marker_id == self.robot_marker_ids['r2']:
                         r2_data = (cx, cy, angle)
                         self.detected_status['r2'] = True
-                        cv2.putText(frame, "R2 (ID1)", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+                        cv2.putText(frame, f"R2 (ID{self.robot_marker_ids['r2']})", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
             else:
                 cv2.putText(frame, "NO ARUCO MARKERS DETECTED", (30, 80),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
