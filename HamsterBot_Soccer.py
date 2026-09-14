@@ -76,8 +76,8 @@ class HamsterSoccerApp:
         self.min_goal_area = 800
 
         self.score = {'ai': 0, 'player': 0}
-        self.goal_cooldown_sec = 3.0     # 득점 후 이 시간 동안은 추가 득점을 세지 않음(중복 방지)
-        self.last_goal_time = 0.0
+        # 공이 골대 밖으로 나갔다가 다시 들어오기 전까지는 그 골대에서 재득점되지 않도록 하는 잠금 상태
+        self.goal_armed = {'ai': True, 'player': True}
         self.goal_pause_until = 0.0      # 득점 직후 잠깐 로봇을 멈춰 "득점 정지"처럼 보이게 함
         self.goal_flash_text = None
         self.goal_flash_until = 0.0
@@ -219,6 +219,7 @@ class HamsterSoccerApp:
 
     def reset_score(self):
         self.score = {'ai': 0, 'player': 0}
+        self.goal_armed = {'ai': True, 'player': True}
         self.update_score_display()
 
     def set_speed(self):
@@ -477,24 +478,35 @@ class HamsterSoccerApp:
         return rx <= x <= rx + rw and ry <= y <= ry + rh
 
     def check_goal(self, ball_x, ball_y, ai_rect, player_rect):
-        """공이 골대 영역에 들어오면 점수를 올림. 득점 후 일정 시간은 중복으로 세지 않음."""
+        """공이 골대 영역에 들어오면 점수를 올림.
+
+        시간이 아니라 "골대 밖으로 나갔다가 다시 들어오는지"로 중복 득점을 막는다:
+        한 번 득점하면 그 골대는 잠기고(goal_armed=False), 공이 그 골대 영역을
+        완전히 벗어나야 다시 잠금이 풀려서 재득점이 가능해진다.
+        """
         now = time.time()
-        if now - self.last_goal_time < self.goal_cooldown_sec:
-            return
+        in_ai = bool(ai_rect and self._point_in_rect(ball_x, ball_y, ai_rect))
+        in_player = bool(player_rect and self._point_in_rect(ball_x, ball_y, player_rect))
+
+        if not in_ai:
+            self.goal_armed['ai'] = True
+        if not in_player:
+            self.goal_armed['player'] = True
 
         scored_side = None
-        if ai_rect and self._point_in_rect(ball_x, ball_y, ai_rect):
+        if in_ai and self.goal_armed['ai']:
             # 공이 AI 골대 안으로 들어감 -> 상대인 Player 득점
             scored_side = 'player'
-        elif player_rect and self._point_in_rect(ball_x, ball_y, player_rect):
+            self.goal_armed['ai'] = False
+        elif in_player and self.goal_armed['player']:
             # 공이 플레이어 골대 안으로 들어감 -> AI 득점
-            # 득점이 반대로 올라가는 것 같으면 위 두 줄의 'player'/'ai' 를 서로 바꾸세요.
+            # 득점이 반대로 올라가는 것 같으면 위 두 분기의 'player'/'ai' 를 서로 바꾸세요.
             scored_side = 'ai'
+            self.goal_armed['player'] = False
 
         if scored_side:
             self.score[scored_side] += 1
             self.update_score_display()
-            self.last_goal_time = now
             self.goal_pause_until = now + 2.0
             self.goal_flash_until = now + 1.5
             self.goal_flash_text = "AI GOAL!" if scored_side == 'ai' else "PLAYER GOAL!"
