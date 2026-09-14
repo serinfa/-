@@ -90,6 +90,7 @@ class HamsterSoccerApp:
         self.attack_align_threshold = 45  # 이 거리 이내면 이미 공 뒤에 있다고 보고 바로 공을 밀어붙임
         self.min_steer_dist = 20         # 목표까지 이 거리(px) 이내면 각도 보정 없이 그냥 직진 (제자리 회전 방지)
         self.attack_state = {}           # 로봇별 'position'(공 뒤로 돌기) / 'push'(공 밀기) 상태
+        self.turn_sign = {}              # 로봇별 마지막 회전 방향(+1/-1) - 목표가 정반대일 때 방향 뒤집힘 방지용
 
         self.score = {'ai': 0, 'player': 0}
         # 공이 골대 밖으로 나갔다가 다시 들어오기 전까지는 그 골대에서 재득점되지 않도록 하는 잠금 상태
@@ -463,6 +464,15 @@ class HamsterSoccerApp:
 
         while angle_diff > 180: angle_diff -= 360
         while angle_diff < -180: angle_diff += 360
+
+        # 목표가 거의 정반대(±180도 근처)에 있으면 좌표 잡음 1~2도만으로도 부호가
+        # 뒤집혀서, 매 프레임 회전 방향이 바뀌며 제자리에서 좌우로 계속 오락가락하게
+        # 된다. 이 구간에서는 방금까지 돌던 방향을 그대로 유지해서 불안정을 없앤다.
+        robot_key = id(robot)
+        if abs(angle_diff) > 150:
+            last_sign = self.turn_sign.get(robot_key, 1 if angle_diff >= 0 else -1)
+            angle_diff = abs(angle_diff) * last_sign
+        self.turn_sign[robot_key] = 1 if angle_diff >= 0 else -1
 
         speed = self.base_speed if is_attacker else int(self.base_speed * 0.7)
 
