@@ -31,7 +31,16 @@ class HamsterSoccerApp:
         self.remaining_seconds = self.game_time_minutes * 60
         self.timer_id = None
 
-        self.base_speed = 50
+        self.base_speed = 42
+
+        # ===== 방향/바퀴 보정 =====
+        # 화면의 빨간 화살표가 로봇의 실제 앞쪽을 향해야 합니다.
+        # 반대면 180, 오른쪽/왼쪽을 향하면 각각 -90/90을 시험하세요.
+        self.heading_offset_deg = 0
+        # 로봇이 목표와 반대쪽으로 돌 때만 -1로 바꾸세요.
+        # Hamster 기본 바퀴 방향에서는 1이 맞습니다.
+        self.steering_sign = 1
+        self.last_turn_sign = {}         # 로봇별 마지막 회전 방향(+1/-1) - 목표가 정반대일 때 방향 뒤집힘 방지용
 
         self.detected_status = {'ball': False, 'r1': False, 'r2': False, 'camera': False}
         # 상태등에 표시할 (인식됨/연결됨 문구, 미인식/끊김 문구)
@@ -82,17 +91,6 @@ class HamsterSoccerApp:
         self.goal_rect_cache = {'ai': None, 'player': None}
         self.goal_rect_lost_count = {'ai': 0, 'player': 0}
         self.goal_rect_max_lost_frames = 20
-
-        # 공격 로봇이 공을 "상대(Player) 골대" 쪽으로 밀도록 유도하는 접근 전략 파라미터.
-        # 공만 보고 바로 돌진하면 접근 방향에 따라 자책골이 날 수 있어서,
-        # 골대 반대편(공 뒤쪽)으로 먼저 돌아가게 한 뒤에 공을 미는 방식을 사용한다.
-        self.attack_behind_offset = 55   # 공-골대 연장선에서 공 뒤쪽으로 경유할 거리(px)
-        self.attack_align_threshold = 45  # 이 거리 이내면 이미 공 뒤에 있다고 보고 바로 공을 밀어붙임
-        self.overshoot_margin = 20       # 실제로 공을 밀고 있을 때(로봇 몸체 크기)는 자책골 안전장치가 안 걸리도록 두는 여유
-        self.min_steer_dist = 20         # 목표까지 이 거리(px) 이내면 각도 보정 없이 그냥 직진 (제자리 회전 방지)
-        self.attack_state = {}           # 로봇별 'position'(공 뒤로 돌기) / 'push'(공 밀기) 상태
-        self.turn_sign = {}              # 로봇별 마지막 회전 방향(+1/-1) - 목표가 정반대일 때 방향 뒤집힘 방지용
-        self.turn_mode = {}              # 로봇별 "제자리 회전 중" 여부 - 30/15도 히스테리시스로 모드 전환 떨림 방지
 
         # 로봇 방향(각도) 스무딩용. 마커 각도는 코너 4개 중 2개만으로 계산되는
         # 값이라 코너 검출이 1~2픽셀만 흔들려도 각도가 크게 튄다(마커가 화면에
@@ -478,159 +476,70 @@ class HamsterSoccerApp:
             if self.h2: self.h2.stop()
             messagebox.showinfo("경기 종료", "경기 시간이 끝났습니다!")
 
-    def move_robot_to_target(self, robot, rx, ry, rangle, tx, ty, is_attacker=True, frame=None, label=""):
-        dx = tx - rx
-        dy = ty - ry
+    @staticmethod
+    def normalize_angle(angle):
+        return (angle + 180) % 360 - 180
 
-        # 목표 지점이 아주 가까우면(공을 미는 접촉 순간 등) 좌표 잡음 몇 픽셀만으로도
-        # 각도가 크게 흔들려서 제자리에서 좌우로 계속 도는 현상이 생긴다.
-        # 이 거리 안에서는 각도 계산 없이 그냥 직진으로 밀어붙인다.
-        if math.hypot(dx, dy) < self.min_steer_dist:
-            speed = self.base_speed if is_attacker else int(self.base_speed * 0.7)
-            robot.wheels(speed, speed)
-            self._draw_drive_debug(frame, label, rx, ry, 0.0, "DEAD_ZONE", speed, speed)
+    def stop_all_robots(self):
+        if self.h1: self.h1.wheels(0, 0)
+        if self.h2: self.h2.wheels(0, 0)
+
+    def move_robot_to_target(self, robot, rx, ry, rangle, tx, ty, is_attacker=True, frame=None, label=""):
+        """안정형 공 추적 제어. 큰 오차에서만 잠시 제자리 회전하고, 대부분은
+        전진하면서 비례 조향한다. 따라서 각도 측정값이 조금 흔들려도 좌/우
+        회전을 반복하지 않는다 (이전의 "제자리에서 계속 도는" 문제의 원인은
+        30도만 넘으면 바로 최대 파워로 제자리 회전하는 방식 자체였다).
+        """
+        dx, dy = tx - rx, ty - ry
+        distance = math.hypot(dx, dy)
+        speed_limit = self.base_speed if is_attacker else int(self.base_speed * 0.70)
+
+        # 공에 닿은 뒤에는 방향을 다시 잡으려 회전하지 말고 곧게 밀어준다.
+        if distance < 26:
+            robot.wheels(speed_limit, speed_limit)
+            self._draw_drive_debug(frame, label, rx, ry, 0.0, "PUSH", speed_limit, speed_limit)
             return
 
-        target_angle = math.degrees(math.atan2(dy, dx))
-        angle_diff = target_angle - rangle
+        desired_angle = math.degrees(math.atan2(dy, dx))
+        error = self.normalize_angle(desired_angle - rangle)
+        if abs(error) < 9:       # 마커/카메라의 미세 흔들림 무시
+            error = 0
 
-        while angle_diff > 180: angle_diff -= 360
-        while angle_diff < -180: angle_diff += 360
-
-        # 목표가 거의 정반대(±180도 근처)에 있으면 좌표 잡음 1~2도만으로도 부호가
-        # 뒤집혀서, 매 프레임 회전 방향이 바뀌며 제자리에서 좌우로 계속 오락가락하게
-        # 된다. 이 구간에서는 방금까지 돌던 방향을 그대로 유지해서 불안정을 없앤다.
-        robot_key = id(robot)
-        if abs(angle_diff) > 150:
-            last_sign = self.turn_sign.get(robot_key, 1 if angle_diff >= 0 else -1)
-            angle_diff = abs(angle_diff) * last_sign
-        self.turn_sign[robot_key] = 1 if angle_diff >= 0 else -1
-
-        speed = self.base_speed if is_attacker else int(self.base_speed * 0.7)
-
-        # 제자리 회전 모드로 "들어가는" 각도(30도)와 "빠져나오는" 각도(15도)를
-        # 다르게 둔다(히스테리시스). 경계값 하나만 쓰면 각도가 그 값 근처에서
-        # 살짝만 흔들려도 두 제어 방식(제자리 회전 <-> 전진하며 미세 조향) 사이를
-        # 매 프레임 오가게 되어, 처음 시작할 때처럼 회전이 필요한 순간에 좌우로
-        # 계속 왔다갔다하는 것처럼 보일 수 있다.
-        in_turn_mode = self.turn_mode.get(robot_key, False)
-        in_turn_mode = abs(angle_diff) > 15 if in_turn_mode else abs(angle_diff) > 30
-        self.turn_mode[robot_key] = in_turn_mode
-
-        # 이 로봇 하드웨어는 좌/우 바퀴 회전 방향이 반대로 매핑되어 있어서,
-        # 원래 부호대로 돌리면 목표에서 오히려 멀어지는 방향으로 계속 돌아
-        # 영상 확인 결과 제자리에서 한쪽으로 끊임없이 회전하기만 했다.
-        # 그래서 아래에서 turn_speed/fine_turn의 좌우를 반대로 적용한다.
-        if in_turn_mode:
-            # 회전 이득/최대 속도를 낮춰서 한 번에 목표 각도를 확 지나쳐버리고
-            # 반대로 다시 도는 오버슈트 진동을 줄인다.
-            turn_speed = int(angle_diff * 0.35)
-            left_wheel = max(-70, min(70, -turn_speed))
-            right_wheel = max(-70, min(70, turn_speed))
-            robot.wheels(left_wheel, right_wheel)
-            self._draw_drive_debug(frame, label, rx, ry, angle_diff, "TURN", left_wheel, right_wheel)
+        key = id(robot)
+        # 정확히 뒤쪽(±180°)은 좌표 노이즈에 따라 부호가 쉽게 뒤집힌다.
+        # 한 번 고른 회전 방향을 계속 유지한다.
+        if abs(error) > 135:
+            sign = self.last_turn_sign.get(key, 1 if error >= 0 else -1)
         else:
-            fine_turn = int(angle_diff * 0.3)
-            left_wheel = max(-100, min(100, speed - fine_turn))
-            right_wheel = max(-100, min(100, speed + fine_turn))
-            robot.wheels(left_wheel, right_wheel)
-            self._draw_drive_debug(frame, label, rx, ry, angle_diff, "DRIVE", left_wheel, right_wheel)
+            sign = 1 if error >= 0 else -1
+        self.last_turn_sign[key] = sign
 
-    def _draw_drive_debug(self, frame, label, rx, ry, angle_diff, mode, left_wheel, right_wheel):
+        # 75° 이상일 때만 제자리 회전. 기존 30°는 영상 노이즈에도 회전 모드가 됐다.
+        if abs(error) > 75:
+            turn = int(np.clip(abs(error) * 0.30, 22, 40)) * sign * self.steering_sign
+            # 로봇이 목표와 반대쪽으로 돈다면 self.steering_sign 을 -1로 바꾸세요.
+            robot.wheels(turn, -turn)
+            self._draw_drive_debug(frame, label, rx, ry, error, "TURN", turn, -turn)
+            return
+
+        # 방향 오차가 있어도 항상 전진하며 부드럽게 방향을 바로잡는다.
+        forward = int(np.clip(speed_limit * distance / 120.0, 18, speed_limit))
+        forward = int(forward * max(0.40, math.cos(math.radians(abs(error)))))
+        correction = int(np.clip(error * 0.30, -22, 22)) * self.steering_sign
+        left_wheel = int(np.clip(forward + correction, -100, 100))
+        right_wheel = int(np.clip(forward - correction, -100, 100))
+        robot.wheels(left_wheel, right_wheel)
+        self._draw_drive_debug(frame, label, rx, ry, error, "DRIVE", left_wheel, right_wheel)
+
+    def _draw_drive_debug(self, frame, label, rx, ry, error, mode, left_wheel, right_wheel):
         """디버그 모드에서 실제로 로봇에 보내는 바퀴 명령값을 화면에 표시.
         코드 로직 문제인지(값이 이상함) 하드웨어/통신 문제인지(값은 정상인데
         로봇이 다르게 움직임) 구분하는 데 사용."""
         if frame is None or not self.show_debug.get():
             return
-        text = f"{label} {mode} diff={angle_diff:.0f} L={left_wheel} R={right_wheel}"
+        text = f"{label} {mode} err={error:.0f} L={left_wheel} R={right_wheel}"
         cv2.putText(frame, text, (int(rx) - 60, int(ry) + 55),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2)
-
-    def _attacker_target(self, robot_key, rx, ry, ball_x, ball_y, goal_center):
-        """공격 로봇이 실제로 향해야 할 좌표를 계산.
-
-        공만 보고 바로 돌진하면 로봇이 어느 방향에서 접근했느냐에 따라 우연히
-        자기 골대 쪽으로 공을 밀어버릴 수 있다. 이를 막기 위해 "공 - 상대 골대"
-        연장선에서 공 뒤쪽 지점을 먼저 목표로 삼아 로봇이 골대 반대편으로
-        돌아가게 하고, 이미 그 지점 근처(공을 사이에 두고 골대 반대편)에
-        있을 때만 공을 직접 향해 밀어붙인다. 골대 위치를 모르면(색상/드래그
-        지정이 모두 없는 경우) 예전처럼 공만 바로 쫓아간다.
-
-        "position"(뒤로 돌기)과 "push"(공 밀기) 상태를 로봇별로 기억해두고,
-        진입/이탈 거리를 다르게 둔다(히스테리시스). 매 프레임 거리 하나로만
-        판단하면 경계 근처에서 두 목표가 계속 번갈아 바뀌어 로봇이 공 앞에서
-        제자리 회전하는 것처럼 보이는 문제가 있었다.
-
-        추가 안전장치: 밀기 모드 중에도 로봇이 공을 지나쳐서
-        "내 골대 - 공 - 로봇" 순서(자책골 위험 구간)가 되면, 히스테리시스와
-        무관하게 즉시 다시 공 뒤로 돌아가게 한다. 그래야 공이 다시
-        로봇 앞쪽(상대 골대 방향)에 오게 된다.
-        """
-        if goal_center is None:
-            self.attack_state[robot_key] = 'push'
-            return ball_x, ball_y
-
-        gx, gy = goal_center
-        dx, dy = ball_x - gx, ball_y - gy
-        dist = math.hypot(dx, dy)
-        if dist < 1e-3:
-            return ball_x, ball_y
-        ux, uy = dx / dist, dy / dist  # 상대 골대 -> 공 방향(=우리 골대 쪽) 단위벡터
-
-        behind_x = ball_x + ux * self.attack_behind_offset
-        behind_y = ball_y + uy * self.attack_behind_offset
-        dist_to_behind = math.hypot(rx - behind_x, ry - behind_y)
-
-        # 공 기준으로 로봇이 이 단위벡터 방향(우리 골대 쪽)에 있으면 양수,
-        # 상대 골대 쪽으로 공을 지나쳐 있으면 음수 -> 자책골 위험 구간.
-        # 실제로 공에 붙어서 미는 중에는 로봇 몸체 크기 때문에 약간 음수로 나올 수
-        # 있어서, overshoot_margin만큼은 정상적인 밀기로 봐준다.
-        overshoot = (rx - ball_x) * ux + (ry - ball_y) * uy
-
-        if overshoot < -self.overshoot_margin:
-            self.attack_state[robot_key] = 'position'
-            return behind_x, behind_y
-
-        state = self.attack_state.get(robot_key, 'position')
-        if state == 'push':
-            # 한 번 밀기 모드로 들어오면, 확실히 멀어지기 전까지는 계속 공을 향해 민다.
-            if dist_to_behind > self.attack_align_threshold * 2:
-                state = 'position'
-        else:
-            if dist_to_behind < self.attack_align_threshold:
-                state = 'push'
-        self.attack_state[robot_key] = state
-
-        return (ball_x, ball_y) if state == 'push' else (behind_x, behind_y)
-
-    def _avoid_ball_waypoint(self, rx, ry, tx, ty, ball_x, ball_y, safety_radius=45):
-        """수비 로봇이 자기 골대로 복귀하는 길에 공을 그대로 통과하면, 실수로
-        공을 자기 골대 쪽으로 밀어 자책골이 될 수 있다. 로봇->목표 직선이 공에
-        너무 가깝게 지나가면, 그 직선을 그대로 쓰지 않고 공을 옆으로 피해 가는
-        경유점을 대신 돌려준다. 공에서 충분히 멀리 지나가는 경로면 원래 목표를
-        그대로 돌려준다.
-        """
-        path_dx, path_dy = tx - rx, ty - ry
-        path_len_sq = path_dx * path_dx + path_dy * path_dy
-        if path_len_sq < 1e-6:
-            return tx, ty
-
-        # 로봇->목표 선분에서 공과 가장 가까운 지점(t=0 로봇, t=1 목표로 정규화)
-        t = ((ball_x - rx) * path_dx + (ball_y - ry) * path_dy) / path_len_sq
-        t = max(0.0, min(1.0, t))
-        closest_x = rx + path_dx * t
-        closest_y = ry + path_dy * t
-        dist_to_path = math.hypot(ball_x - closest_x, ball_y - closest_y)
-
-        # 공이 로봇을 이미 지나쳤거나(t~0) 경로에서 충분히 멀면 그대로 직진해도 안전
-        if dist_to_path >= safety_radius or t < 0.05:
-            return tx, ty
-
-        path_len = math.sqrt(path_len_sq)
-        nx, ny = -path_dy / path_len, path_dx / path_len
-        side = (ball_x - closest_x) * nx + (ball_y - closest_y) * ny
-        push_dir = -1 if side >= 0 else 1
-        return ball_x + nx * push_dir * safety_radius, ball_y + ny * push_dir * safety_radius
 
     def detect_ball(self, frame):
         """노란 공을 찾아 (x, y)를 반환. 못 찾으면 (-1, -1).
@@ -820,8 +729,7 @@ class HamsterSoccerApp:
             self.goal_pause_until = now + 2.0
             self.goal_flash_until = now + 1.5
             self.goal_flash_text = "AI GOAL!" if scored_side == 'ai' else "PLAYER GOAL!"
-            if self.h1: self.h1.wheels(0, 0)
-            if self.h2: self.h2.wheels(0, 0)
+            self.stop_all_robots()
 
     def _show_camera_error_frame(self):
         h, w = self.orig_frame_shape if self.orig_frame_shape[0] else (450, 800)
@@ -848,8 +756,7 @@ class HamsterSoccerApp:
                 self.detected_status['camera'] = False
                 self.update_status_indicators()
                 if self.is_playing:
-                    if self.h1: self.h1.wheels(0, 0)
-                    if self.h2: self.h2.wheels(0, 0)
+                    self.stop_all_robots()
             self._show_camera_error_frame()
             self.root.after(15, self.update_frame)
             return
@@ -904,11 +811,16 @@ class HamsterSoccerApp:
                         front_x = (c[0][0] + c[1][0]) / 2.0
                         front_y = (c[0][1] + c[1][1]) / 2.0
                         angle = math.degrees(math.atan2(front_y - cy, front_x - cx))
+                        angle = self.normalize_angle(angle + self.heading_offset_deg)
                         best_by_id[marker_id] = (area, cx, cy, angle, c, front_x, front_y)
 
                 for marker_id, (area, cx, cy, angle, c, front_x, front_y) in best_by_id.items():
                     cv2.polylines(frame, [c.astype(np.int32)], True, (0, 255, 0), 2)
-                    cv2.arrowedLine(frame, (cx, cy), (int(front_x), int(front_y)), (0, 0, 255), 3, tipLength=0.3)
+                    # 화살표는 heading_offset_deg가 반영된 최종 각도로 그려서, 코드가
+                    # "앞"이라고 판단하는 방향을 그대로 시각적으로 확인할 수 있게 한다.
+                    arrow_x = int(cx + 35 * math.cos(math.radians(angle)))
+                    arrow_y = int(cy + 35 * math.sin(math.radians(angle)))
+                    cv2.arrowedLine(frame, (cx, cy), (arrow_x, arrow_y), (0, 0, 255), 3, tipLength=0.3)
                     if debug_on:
                         cv2.putText(frame, f"ID:{marker_id}", (cx - 15, cy + 35),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
@@ -932,75 +844,48 @@ class HamsterSoccerApp:
             if self.is_playing and ball_x != -1:
                 self.check_goal(ball_x, ball_y, ai_goal_rect, player_goal_rect)
 
-            # 공격 목표(상대인 Player 골대 중심)와 수비 복귀 지점(자기 골대 중심)
-            player_goal_center = None
-            if player_goal_rect:
-                gx, gy, gw, gh = player_goal_rect
-                player_goal_center = (gx + gw / 2, gy + gh / 2)
-            if ai_goal_rect:
-                gx, gy, gw, gh = ai_goal_rect
-                defend_point = (gx + gw / 2, gy + gh / 2)
-            else:
-                defend_point = (280, 360)
-
             in_goal_pause = time.time() < self.goal_pause_until
 
             # --- 자율 주행 실행부 ---
+            # 골대 우회/공격-수비 역할 분담 로직은 복잡도가 커서 오히려 원운동의
+            # 원인이 됐다. 대신 "공에 가장 가까운 로봇 한 대만 공을 직접 쫓고,
+            # 나머지는 정지"하는 단순한 전략으로 안정성을 우선한다. 자책골
+            # 방지는 move_robot_to_target의 접촉 시 직진 처리로 완화한다.
             if self.is_playing and in_goal_pause:
-                if self.h1: self.h1.wheels(0, 0)
-                if self.h2: self.h2.wheels(0, 0)
+                self.stop_all_robots()
             elif self.is_playing:
                 current_mode = self.active_mode.get()
 
-                # 선택되지 않은 로봇은 강제 정지
-                if current_mode == "r1" and self.h2: self.h2.wheels(0, 0)
-                if current_mode == "r2" and self.h1: self.h1.wheels(0, 0)
-
-                if ball_x != -1:
-                    # 1번 로봇만 동작 모드
-                    if current_mode == "r1" and r1_data:
-                        atk_x, atk_y = self._attacker_target('r1', r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
-                        self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R1')
-                        cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
-
-                    # 2번 로봇만 동작 모드
-                    elif current_mode == "r2" and r2_data:
-                        atk_x, atk_y = self._attacker_target('r2', r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
-                        self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R2')
-                        cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
-
-                    # 두 대 모두 동작 모드
-                    elif current_mode == "both":
-                        if r1_data and r2_data:
-                            dist1 = math.sqrt((r1_data[0] - ball_x)**2 + (r1_data[1] - ball_y)**2)
-                            dist2 = math.sqrt((r2_data[0] - ball_x)**2 + (r2_data[1] - ball_y)**2)
-
-                            if dist1 < dist2:
-                                atk_x, atk_y = self._attacker_target('r1', r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
-                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R1')
-                                def_x, def_y = self._avoid_ball_waypoint(r2_data[0], r2_data[1], defend_point[0], defend_point[1], ball_x, ball_y)
-                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], def_x, def_y, is_attacker=False, frame=frame, label='R2')
-                                cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
-                            else:
-                                atk_x, atk_y = self._attacker_target('r2', r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
-                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R2')
-                                def_x, def_y = self._avoid_ball_waypoint(r1_data[0], r1_data[1], defend_point[0], defend_point[1], ball_x, ball_y)
-                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], def_x, def_y, is_attacker=False, frame=frame, label='R1')
-                                cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
-                        elif r1_data:
-                            atk_x, atk_y = self._attacker_target('r1', r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
-                            self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R1')
-                            cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
-                            if self.h2: self.h2.wheels(0, 0)
-                        elif r2_data:
-                            atk_x, atk_y = self._attacker_target('r2', r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
-                            self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R2')
-                            cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
-                            if self.h1: self.h1.wheels(0, 0)
-                else:
-                    cv2.putText(frame, "BALL NOT DETECTED - ROBOTS STOPPED", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
-                    if self.h1: self.h1.wheels(0, 0)
+                # 공의 예측 좌표가 아니라, 실제로 이번 프레임에서 검출된 공만 따라간다.
+                # 가려진 상태의 오래된(EMA로 미룬) 좌표를 향해 도는 것을 막는다.
+                if ball_x == -1 or not ball_fresh:
+                    self.stop_all_robots()
+                    cv2.putText(frame, "BALL NOT DETECTED - ROBOTS STOPPED", (30, 50),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                elif current_mode == "r1":
                     if self.h2: self.h2.wheels(0, 0)
+                    if r1_data:
+                        self.move_robot_to_target(self.h1, *r1_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R1')
+                        cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (0, 255, 255), 2)
+                elif current_mode == "r2":
+                    if self.h1: self.h1.wheels(0, 0)
+                    if r2_data:
+                        self.move_robot_to_target(self.h2, *r2_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R2')
+                        cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (0, 255, 255), 2)
+                else:  # 두 대 모드: 공에 더 가까운 한 대만 추적, 다른 한 대는 정지
+                    candidates = []
+                    if r1_data: candidates.append(("r1", r1_data, self.h1))
+                    if r2_data: candidates.append(("r2", r2_data, self.h2))
+                    if not candidates:
+                        self.stop_all_robots()
+                    else:
+                        key, pose, robot = min(candidates, key=lambda item: math.dist(item[1][:2], (ball_x, ball_y)))
+                        other = self.h2 if key == "r1" else self.h1
+                        if other: other.wheels(0, 0)
+                        self.move_robot_to_target(robot, *pose, ball_x, ball_y, is_attacker=True, frame=frame, label=key.upper())
+                        cv2.line(frame, (int(pose[0]), int(pose[1])), (ball_x, ball_y), (0, 255, 255), 2)
+                        cv2.putText(frame, f"{key.upper()} CHASING BALL", (30, 110),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
 
             elif not self.detected_status['ball']:
                 cv2.putText(frame, "FINDING YELLOW BALL...", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 3)
