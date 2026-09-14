@@ -21,7 +21,7 @@ class HamsterSoccerApp:
         self.button_color = "#7f8c8d"
         self.text_color = "white"
         self.title_font = font.Font(family="맑은 고딕", size=20, weight="bold")
-        self.score_font = font.Font(family="맑은 고딕", size=48, weight="bold")
+        self.score_font = font.Font(family="맑은 고딕", size=72, weight="bold")
         self.btn_font = font.Font(family="맑은 고딕", size=12, weight="bold")
         self.section_font = font.Font(family="맑은 고딕", size=11, weight="bold")
         self.status_font = font.Font(family="맑은 고딕", size=12, weight="bold")
@@ -81,6 +81,7 @@ class HamsterSoccerApp:
         # 골대 반대편(공 뒤쪽)으로 먼저 돌아가게 한 뒤에 공을 미는 방식을 사용한다.
         self.attack_behind_offset = 55   # 공-골대 연장선에서 공 뒤쪽으로 경유할 거리(px)
         self.attack_align_threshold = 45  # 이 거리 이내면 이미 공 뒤에 있다고 보고 바로 공을 밀어붙임
+        self.min_steer_dist = 20         # 목표까지 이 거리(px) 이내면 각도 보정 없이 그냥 직진 (제자리 회전 방지)
 
         self.score = {'ai': 0, 'player': 0}
         # 공이 골대 밖으로 나갔다가 다시 들어오기 전까지는 그 골대에서 재득점되지 않도록 하는 잠금 상태
@@ -194,19 +195,19 @@ class HamsterSoccerApp:
         tk.Button(goal_btn_row, text="초기화", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=6, relief="raised", bd=3, command=self.reset_goal_zones).pack(side="left", expand=True, fill="x", padx=1)
 
-        # 3. 중앙 타이머 및 점수 (남는 폭을 모두 차지)
-        center_frame = tk.Frame(top_frame, bg=self.bg_color, padx=30, pady=10, relief="sunken", bd=2)
+        # 3. 중앙 타이머 및 점수 (남는 폭을 모두 차지) - 배경을 주황색으로
+        scoreboard_bg = "#ff9500"
+        center_frame = tk.Frame(top_frame, bg=scoreboard_bg, padx=30, pady=10, relief="sunken", bd=2)
         center_frame.grid(row=0, column=2, sticky="nsew", padx=10)
-        self.timer_label = tk.Label(center_frame, text="남은 시간 03:00", bg=self.bg_color, fg="yellow", font=self.title_font)
+        self.timer_label = tk.Label(center_frame, text="남은 시간 03:00", bg=scoreboard_bg, fg="white", font=self.title_font)
         self.timer_label.pack()
 
-        score_row = tk.Frame(center_frame, bg=self.bg_color)
+        score_row = tk.Frame(center_frame, bg=scoreboard_bg)
         score_row.pack(pady=(5, 0))
-        score_color = "#ff9500"
-        tk.Label(score_row, text="AI", bg=self.bg_color, fg=score_color, font=self.score_font).pack(side="left")
-        self.score_mid_label = tk.Label(score_row, text="  0 : 0  ", bg=self.bg_color, fg=score_color, font=self.score_font)
+        tk.Label(score_row, text="AI", bg=scoreboard_bg, fg="white", font=self.score_font).pack(side="left")
+        self.score_mid_label = tk.Label(score_row, text=" 0 : 0 ", bg=scoreboard_bg, fg="white", font=self.score_font)
         self.score_mid_label.pack(side="left")
-        tk.Label(score_row, text="Player", bg=self.bg_color, fg=score_color, font=self.score_font).pack(side="left")
+        tk.Label(score_row, text="Player", bg=scoreboard_bg, fg="white", font=self.score_font).pack(side="left")
 
         # 4. 연결/인식 상태 (실시간 상태등 + 카메라 재연결 + 하드웨어 점검)
         status_frame = self._section_frame(top_frame, "연결 / 인식 상태")
@@ -438,6 +439,14 @@ class HamsterSoccerApp:
     def move_robot_to_target(self, robot, rx, ry, rangle, tx, ty, is_attacker=True):
         dx = tx - rx
         dy = ty - ry
+
+        # 목표 지점이 아주 가까우면(공을 미는 접촉 순간 등) 좌표 잡음 몇 픽셀만으로도
+        # 각도가 크게 흔들려서 제자리에서 좌우로 계속 도는 현상이 생긴다.
+        # 이 거리 안에서는 각도 계산 없이 그냥 직진으로 밀어붙인다.
+        if math.hypot(dx, dy) < self.min_steer_dist:
+            speed = self.base_speed if is_attacker else int(self.base_speed * 0.7)
+            robot.wheels(speed, speed)
+            return
 
         target_angle = math.degrees(math.atan2(dy, dx))
         angle_diff = target_angle - rangle
