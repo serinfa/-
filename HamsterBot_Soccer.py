@@ -93,6 +93,14 @@ class HamsterSoccerApp:
         self.attack_state = {}           # 로봇별 'position'(공 뒤로 돌기) / 'push'(공 밀기) 상태
         self.turn_sign = {}              # 로봇별 마지막 회전 방향(+1/-1) - 목표가 정반대일 때 방향 뒤집힘 방지용
 
+        # 로봇 방향(각도) 스무딩용. 마커 각도는 코너 4개 중 2개만으로 계산되는
+        # 값이라 코너 검출이 1~2픽셀만 흔들려도 각도가 크게 튄다(마커가 화면에
+        # 작게/비스듬히 보일수록 더 심함) - 공 위치처럼 EMA로 다듬어서 로봇이
+        # 멀리서 방향을 못 잡고 헤매는 것을 줄인다. 각도는 원형(±180도 경계)이라
+        # 값 자체가 아니라 단위벡터(cos, sin)에 EMA를 적용한다.
+        self.robot_angle_ema = {'r1': None, 'r2': None}
+        self.robot_angle_alpha = 0.35
+
         self.score = {'ai': 0, 'player': 0}
         # 공이 골대 밖으로 나갔다가 다시 들어오기 전까지는 그 골대에서 재득점되지 않도록 하는 잠금 상태
         self.goal_armed = {'ai': True, 'player': True}
@@ -666,6 +674,22 @@ class HamsterSoccerApp:
         self.goal_rect_cache[side] = None
         return None
 
+    def _smooth_angle(self, key, raw_angle_deg):
+        """로봇 방향 각도를 EMA로 다듬는다. 각도는 원형(-180~180 경계에서 순환)
+        값이라 그대로 평균 내면 안 되므로, 단위벡터(cos, sin)에 EMA를 적용한 뒤
+        다시 각도로 변환한다."""
+        rad = math.radians(raw_angle_deg)
+        vx, vy = math.cos(rad), math.sin(rad)
+        prev = self.robot_angle_ema.get(key)
+        if prev is None:
+            self.robot_angle_ema[key] = (vx, vy)
+        else:
+            a = self.robot_angle_alpha
+            pvx, pvy = prev
+            self.robot_angle_ema[key] = (a * vx + (1 - a) * pvx, a * vy + (1 - a) * pvy)
+        svx, svy = self.robot_angle_ema[key]
+        return math.degrees(math.atan2(svy, svx))
+
     def detect_goal_zones(self, frame):
         """AI 골대(빨강)와 플레이어 골대(파랑)의 사각형 범위를 찾아 화면에 표시.
 
@@ -832,11 +856,11 @@ class HamsterSoccerApp:
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
 
                     if marker_id == self.robot_marker_ids['r1']:
-                        r1_data = (cx, cy, angle)
+                        r1_data = (cx, cy, self._smooth_angle('r1', angle))
                         self.detected_status['r1'] = True
                         cv2.putText(frame, f"R1 (ID{self.robot_marker_ids['r1']})", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
                     elif marker_id == self.robot_marker_ids['r2']:
-                        r2_data = (cx, cy, angle)
+                        r2_data = (cx, cy, self._smooth_angle('r2', angle))
                         self.detected_status['r2'] = True
                         cv2.putText(frame, f"R2 (ID{self.robot_marker_ids['r2']})", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
             elif debug_on:
