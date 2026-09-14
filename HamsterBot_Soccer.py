@@ -232,6 +232,11 @@ class HamsterSoccerApp:
         self.score_mid_label.pack(side="left")
         tk.Label(score_row, text="Player", bg=scoreboard_bg, fg="white", font=self.score_font).pack(side="left")
 
+        # 창(패널)이 좁아지면 점수/타이머 글자가 잘리지 않도록 폭에 맞춰 폰트 크기를 줄임.
+        # score_font/title_font는 tk.font.Font 객체라서 .configure(size=...)를 하면
+        # 이 폰트를 쓰는 모든 라벨에 한 번에 반영된다.
+        center_frame.bind("<Configure>", self._on_scoreboard_resize)
+
         # 4. 연결/인식 상태 (실시간 상태등 + 카메라 재연결 + 하드웨어 점검)
         status_frame = self._section_frame(top_frame, "연결 / 인식 상태")
         status_frame.grid(row=0, column=3, sticky="ns", padx=(10, 0))
@@ -272,6 +277,18 @@ class HamsterSoccerApp:
 
     def update_score_display(self):
         self.score_mid_label.config(text=f"  {self.score['ai']} : {self.score['player']}  ")
+
+    def _on_scoreboard_resize(self, event):
+        """점수판 패널 폭에 맞춰 점수/타이머 글자 크기를 조절 (창이 작아지면 글자가
+        잘리는 문제 방지). "AI 0 : 0 Player"가 대략 14글자이므로 폭을 14로 나눈
+        값을 폰트 크기로 사용하고, 최소/최대 크기로 제한한다."""
+        new_score_size = max(14, min(72, event.width // 14))
+        if self.score_font.cget("size") != new_score_size:
+            self.score_font.configure(size=new_score_size)
+
+        new_title_size = max(10, min(20, event.width // 42))
+        if self.title_font.cget("size") != new_title_size:
+            self.title_font.configure(size=new_title_size)
 
     def reset_score(self):
         self.score = {'ai': 0, 'player': 0}
