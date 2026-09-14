@@ -499,18 +499,21 @@ class HamsterSoccerApp:
         in_turn_mode = abs(angle_diff) > 15 if in_turn_mode else abs(angle_diff) > 30
         self.turn_mode[robot_key] = in_turn_mode
 
+        # 이 로봇 하드웨어는 좌/우 바퀴 회전 방향이 반대로 매핑되어 있어서,
+        # 원래 부호대로 돌리면 목표에서 오히려 멀어지는 방향으로 계속 돌아
+        # 영상 확인 결과 제자리에서 한쪽으로 끊임없이 회전하기만 했다.
+        # 그래서 아래에서 turn_speed/fine_turn의 좌우를 반대로 적용한다.
         if in_turn_mode:
             # 회전 이득/최대 속도를 낮춰서 한 번에 목표 각도를 확 지나쳐버리고
             # 반대로 다시 도는 오버슈트 진동을 줄인다.
             turn_speed = int(angle_diff * 0.35)
-            # 만약 로봇이 제자리에서 반대 방향으로 돈다면 아래의 turn_speed 와 -turn_speed 를 맞바꾸세요.
-            left_wheel = max(-70, min(70, turn_speed))
-            right_wheel = max(-70, min(70, -turn_speed))
+            left_wheel = max(-70, min(70, -turn_speed))
+            right_wheel = max(-70, min(70, turn_speed))
             robot.wheels(left_wheel, right_wheel)
         else:
             fine_turn = int(angle_diff * 0.3)
-            left_wheel = max(-100, min(100, speed + fine_turn))
-            right_wheel = max(-100, min(100, speed - fine_turn))
+            left_wheel = max(-100, min(100, speed - fine_turn))
+            right_wheel = max(-100, min(100, speed + fine_turn))
             robot.wheels(left_wheel, right_wheel)
 
     def _attacker_target(self, robot_key, rx, ry, ball_x, ball_y, goal_center):
