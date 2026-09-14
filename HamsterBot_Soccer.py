@@ -18,6 +18,7 @@ class HamsterSoccerApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         self.bg_color = "#537bc4"
+        self.button_color = "#7f8c8d"
         self.text_color = "white"
         self.title_font = font.Font(family="맑은 고딕", size=20, weight="bold")
         self.score_font = font.Font(family="맑은 고딕", size=32, weight="bold")
@@ -136,13 +137,13 @@ class HamsterSoccerApp:
     def _section_frame(self, parent, title):
         """상단 제어 영역에서 기능별로 묶어 보여줄 그룹 박스."""
         frame = tk.LabelFrame(parent, text=title, bg="white", fg=self.bg_color,
-                               font=self.section_font, padx=12, pady=8,
+                               font=self.section_font, padx=10, pady=5,
                                relief="groove", bd=2)
         return frame
 
     def setup_ui(self):
         top_frame = tk.Frame(self.root, bg="white")
-        top_frame.pack(fill="x", pady=15, padx=20)
+        top_frame.pack(fill="x", pady=8, padx=20)
         # 중앙(타이머/스코어) 칸만 창 너비에 맞춰 늘어나고 나머지는 내용 크기 유지
         for col, weight in ((0, 0), (1, 0), (2, 1), (3, 0)):
             top_frame.grid_columnconfigure(col, weight=weight)
@@ -150,12 +151,12 @@ class HamsterSoccerApp:
         # 1. 경기 제어 (시작/정지, 시간 설정)
         game_frame = self._section_frame(top_frame, "경기 제어")
         game_frame.grid(row=0, column=0, sticky="ns", padx=(0, 10))
-        self.btn_start = tk.Button(game_frame, text="시작", bg=self.bg_color, fg=self.text_color,
+        self.btn_start = tk.Button(game_frame, text="시작", bg=self.button_color, fg=self.text_color,
                                    font=self.btn_font, width=12, height=2, relief="raised", bd=4, command=self.toggle_play)
         self.btn_start.pack(pady=3)
-        tk.Button(game_frame, text="시간 설정", bg=self.bg_color, fg=self.text_color,
+        tk.Button(game_frame, text="시간 설정", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=12, relief="raised", bd=3, command=self.set_time).pack(pady=3)
-        tk.Button(game_frame, text="점수 초기화", bg=self.bg_color, fg=self.text_color,
+        tk.Button(game_frame, text="점수 초기화", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=12, relief="raised", bd=3, command=self.reset_score).pack(pady=3)
 
         # 2. 로봇 설정 (동작 로봇 선택, 속도, 색상 보정)
@@ -166,11 +167,26 @@ class HamsterSoccerApp:
         tk.Radiobutton(mode_sub, text=f"1번(ID{self.robot_marker_ids['r1']})만", variable=self.active_mode, value="r1", bg="white").pack(anchor="w")
         tk.Radiobutton(mode_sub, text=f"2번(ID{self.robot_marker_ids['r2']})만", variable=self.active_mode, value="r2", bg="white").pack(anchor="w")
         tk.Radiobutton(mode_sub, text="두 대 모두", variable=self.active_mode, value="both", bg="white").pack(anchor="w")
-        tk.Button(robot_frame, text="속도 조절", bg=self.bg_color, fg=self.text_color,
+        tk.Button(robot_frame, text="속도 조절", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.set_speed).pack(pady=3, fill="x")
-        self.btn_calibrate = tk.Button(robot_frame, text="공 색상 보정(영상 클릭)", bg=self.bg_color, fg=self.text_color,
+        self.btn_calibrate = tk.Button(robot_frame, text="공 색상 보정(영상 클릭)", bg=self.button_color, fg=self.text_color,
                                         font=self.btn_font, width=16, relief="raised", bd=3, command=self.start_calibration)
         self.btn_calibrate.pack(pady=3, fill="x")
+
+        # 골대 위치: 영상에서 드래그로 직접 지정 (미지정 시 색상 자동 인식)
+        tk.Label(robot_frame, text="골대 지정(영상 드래그)", bg="white", font=self.status_font).pack(anchor="w", pady=(4, 0))
+        goal_btn_row = tk.Frame(robot_frame, bg="white")
+        goal_btn_row.pack(pady=(3, 0), fill="x")
+        self.btn_set_ai_goal = tk.Button(goal_btn_row, text="AI골대", bg=self.button_color, fg="white",
+                                          font=self.btn_font, width=6, relief="raised", bd=3,
+                                          command=lambda: self.start_goal_pick('ai'))
+        self.btn_set_ai_goal.pack(side="left", expand=True, fill="x", padx=1)
+        self.btn_set_player_goal = tk.Button(goal_btn_row, text="P골대", bg=self.button_color, fg="white",
+                                              font=self.btn_font, width=6, relief="raised", bd=3,
+                                              command=lambda: self.start_goal_pick('player'))
+        self.btn_set_player_goal.pack(side="left", expand=True, fill="x", padx=1)
+        tk.Button(goal_btn_row, text="초기화", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=6, relief="raised", bd=3, command=self.reset_goal_zones).pack(side="left", expand=True, fill="x", padx=1)
 
         # 3. 중앙 타이머 및 점수 (남는 폭을 모두 차지)
         center_frame = tk.Frame(top_frame, bg=self.bg_color, padx=30, pady=10, relief="sunken", bd=2)
@@ -202,31 +218,15 @@ class HamsterSoccerApp:
             dot = tk.Label(row, text="● 미확인", bg="white", fg="#e74c3c", font=self.status_font)
             dot.pack(side="left")
             self.status_labels[key] = dot
-        tk.Button(status_frame, text="카메라 재연결", bg=self.bg_color, fg=self.text_color,
+        tk.Button(status_frame, text="카메라 재연결", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.reconnect_camera).pack(pady=(8, 0), fill="x")
-        tk.Button(status_frame, text="연결/하드웨어 점검", bg=self.bg_color, fg=self.text_color,
+        tk.Button(status_frame, text="연결/하드웨어 점검", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.check_status).pack(pady=3, fill="x")
         tk.Checkbutton(status_frame, text="디버그 정보 표시", variable=self.show_debug,
                         bg="white", font=self.status_font).pack(anchor="w", pady=(3, 0))
 
-        # 5. 골대 위치 설정 (영상 위에서 드래그로 직접 지정, 지정 안 하면 색상 자동 인식 사용)
-        goal_setup_frame = self._section_frame(self.root, "골대 위치 설정 (영상에서 드래그, 미지정 시 색상 자동 인식)")
-        goal_setup_frame.pack(fill="x", padx=20, pady=(0, 10))
-        goal_btn_row = tk.Frame(goal_setup_frame, bg="white")
-        goal_btn_row.pack()
-        self.btn_set_ai_goal = tk.Button(goal_btn_row, text="AI 골대 지정", bg="#e74c3c", fg="white",
-                                          font=self.btn_font, width=14, relief="raised", bd=3,
-                                          command=lambda: self.start_goal_pick('ai'))
-        self.btn_set_ai_goal.pack(side="left", padx=5)
-        self.btn_set_player_goal = tk.Button(goal_btn_row, text="Player 골대 지정", bg="#3b82f6", fg="white",
-                                              font=self.btn_font, width=14, relief="raised", bd=3,
-                                              command=lambda: self.start_goal_pick('player'))
-        self.btn_set_player_goal.pack(side="left", padx=5)
-        tk.Button(goal_btn_row, text="골대 위치 초기화(색상 인식 복귀)", bg=self.bg_color, fg=self.text_color,
-                  font=self.btn_font, width=24, relief="raised", bd=3, command=self.reset_goal_zones).pack(side="left", padx=5)
-
         self.video_label = tk.Label(self.root, bg=self.bg_color)
-        self.video_label.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        self.video_label.pack(fill="both", expand=True, padx=20, pady=(0, 10))
         self.video_label.bind("<ButtonPress-1>", self.on_video_press)
         self.video_label.bind("<B1-Motion>", self.on_video_drag)
         self.video_label.bind("<ButtonRelease-1>", self.on_video_release)
@@ -321,8 +321,7 @@ class HamsterSoccerApp:
             messagebox.showinfo("골대 지정 완료", f"{label} 골대 위치가 저장되었습니다.")
 
         btn = self.btn_set_ai_goal if side == 'ai' else self.btn_set_player_goal
-        btn.config(text=("AI 골대 지정" if side == 'ai' else "Player 골대 지정"),
-                   bg=("#e74c3c" if side == 'ai' else "#3b82f6"))
+        btn.config(text=("AI골대" if side == 'ai' else "P골대"), bg=self.button_color)
         self.goal_pick_side = None
         self.goal_drag_start = None
         self.goal_drag_current = None
@@ -332,7 +331,7 @@ class HamsterSoccerApp:
         self.goal_drag_start = None
         self.goal_drag_current = None
         btn = self.btn_set_ai_goal if side == 'ai' else self.btn_set_player_goal
-        btn.config(text="영상에서 드래그하세요...", bg="orange")
+        btn.config(text="드래그...", bg="orange")
 
     def reset_goal_zones(self):
         self.manual_goal_rects = {'ai': None, 'player': None}
@@ -368,7 +367,7 @@ class HamsterSoccerApp:
         self.ball_lost_count = 0
 
         self.calibrating = False
-        self.btn_calibrate.config(text="공 색상 보정 (영상 클릭)", bg=self.bg_color)
+        self.btn_calibrate.config(text="공 색상 보정 (영상 클릭)", bg=self.button_color)
         messagebox.showinfo(
             "색상 보정 완료",
             f"새 HSV 범위로 갱신되었습니다.\nLower {self.ball_lower.astype(int)}\nUpper {self.ball_upper.astype(int)}"
@@ -412,7 +411,7 @@ class HamsterSoccerApp:
             self.btn_start.config(text="정지", bg="red")
             self.countdown()
         else:
-            self.btn_start.config(text="시작", bg=self.bg_color)
+            self.btn_start.config(text="시작", bg=self.button_color)
             if self.timer_id: self.root.after_cancel(self.timer_id)
             if self.h1: self.h1.stop()
             if self.h2: self.h2.stop()
@@ -424,7 +423,7 @@ class HamsterSoccerApp:
             self.timer_id = self.root.after(1000, self.countdown)
         elif self.remaining_seconds <= 0:
             self.is_playing = False
-            self.btn_start.config(text="시작", bg=self.bg_color)
+            self.btn_start.config(text="시작", bg=self.button_color)
             if self.h1: self.h1.stop()
             if self.h2: self.h2.stop()
             messagebox.showinfo("경기 종료", "경기 시간이 끝났습니다!")
