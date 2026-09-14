@@ -501,22 +501,30 @@ class HamsterSoccerApp:
         또 스쳐 지나가기를 반복해서 "공은 안 건드리고 로봇만 뱅뱅 도는"
         것처럼 보이는 원인이 됐다. 로봇 마커의 실제 크기(robot_radius)를
         반영해 접촉 거리를 더 정확하게(더 작게) 잡는다.
+
+        또한 거리만 보고 "가까우면 무조건 직진"하면, 비스듬히 접근한 상태로
+        접촉 거리 안에 들어왔을 때 공이 아닌 엉뚱한 방향으로 그대로 직진해서
+        공 옆을 지나쳐버린다 (공을 가운데 두고 로봇들이 반대편으로 넘어가며
+        벌어지는 것처럼 보이는 원인). 그래서 방향이 어느 정도 맞을 때만
+        (|오차| < 40도) 직진으로 밀어붙이고, 아니면 가까이서도 계속 각도를
+        미세 조정한다.
         """
         dx, dy = tx - rx, ty - ry
         distance = math.hypot(dx, dy)
         speed_limit = self.base_speed if is_attacker else int(self.base_speed * 0.70)
 
-        # 공에 닿은 뒤에는 방향을 다시 잡으려 회전하지 말고 곧게 밀어준다.
-        contact_dist = max(25, robot_radius * 1.15 + ball_radius * 1.05)
-        if distance < contact_dist:
-            robot.wheels(speed_limit, speed_limit)
-            self._draw_drive_debug(frame, label, rx, ry, 0.0, "PUSH", speed_limit, speed_limit)
-            return
-
         desired_angle = math.degrees(math.atan2(dy, dx))
         error = self.normalize_angle(desired_angle - rangle)
         if abs(error) < 9:       # 마커/카메라의 미세 흔들림 무시
             error = 0
+
+        # 공에 닿은 뒤(그리고 방향도 맞을 때)에는 방향을 다시 잡으려 회전하지
+        # 말고 곧게 밀어준다.
+        contact_dist = max(25, robot_radius * 1.15 + ball_radius * 1.05)
+        if distance < contact_dist and abs(error) < 40:
+            robot.wheels(speed_limit, speed_limit)
+            self._draw_drive_debug(frame, label, rx, ry, error, "PUSH", speed_limit, speed_limit)
+            return
 
         key = id(robot)
         # 정확히 뒤쪽(±180°)은 좌표 노이즈에 따라 부호가 쉽게 뒤집힌다.
