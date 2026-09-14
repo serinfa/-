@@ -43,7 +43,7 @@ class HamsterSoccerApp:
 
         # 로봇에 실제로 부착된 아루코 마커 ID. 카메라 화면의 "Detected marker IDs"
         # 표시로 확인한 실제 값으로 맞춰야 함 (라벨을 다시 인쇄할 필요 없음).
-        self.robot_marker_ids = {'r1': 0, 'r2': 3}
+        self.robot_marker_ids = {'r1': 0, 'r2': 1}
 
         self.active_mode = tk.StringVar(value="both")
         self.show_debug = tk.BooleanVar(value=False)
