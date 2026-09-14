@@ -486,18 +486,25 @@ class HamsterSoccerApp:
         if self.h1: self.h1.wheels(0, 0)
         if self.h2: self.h2.wheels(0, 0)
 
-    def move_robot_to_target(self, robot, rx, ry, rangle, tx, ty, is_attacker=True, frame=None, label=""):
+    def move_robot_to_target(self, robot, rx, ry, rangle, tx, ty, is_attacker=True, frame=None, label="", ball_radius=15):
         """안정형 공 추적 제어. 큰 오차에서만 잠시 제자리 회전하고, 대부분은
         전진하면서 비례 조향한다. 따라서 각도 측정값이 조금 흔들려도 좌/우
         회전을 반복하지 않는다 (이전의 "제자리에서 계속 도는" 문제의 원인은
         30도만 넘으면 바로 최대 파워로 제자리 회전하는 방식 자체였다).
+
+        접촉 판정 거리(dead zone)는 공의 인식 반지름(ball_radius)에 비례해서
+        정한다. 실제 로봇이 카메라에 크게 잡히는 해상도에서는 "공에 붙어있는"
+        상태의 중심 간 거리가 수백 픽셀이 될 수 있는데, 고정값(예: 26px)으로는
+        전혀 닿지 않은 것으로 판단해서 공을 미는 순간에도 계속 각도를 재려고
+        제자리 회전을 반복하는 문제가 있었다.
         """
         dx, dy = tx - rx, ty - ry
         distance = math.hypot(dx, dy)
         speed_limit = self.base_speed if is_attacker else int(self.base_speed * 0.70)
 
         # 공에 닿은 뒤에는 방향을 다시 잡으려 회전하지 말고 곧게 밀어준다.
-        if distance < 26:
+        contact_dist = max(30, ball_radius * 3.5)
+        if distance < contact_dist:
             robot.wheels(speed_limit, speed_limit)
             self._draw_drive_debug(frame, label, rx, ry, 0.0, "PUSH", speed_limit, speed_limit)
             return
@@ -525,7 +532,10 @@ class HamsterSoccerApp:
             return
 
         # 방향 오차가 있어도 항상 전진하며 부드럽게 방향을 바로잡는다.
-        forward = int(np.clip(speed_limit * distance / 120.0, 18, speed_limit))
+        # 감속을 시작하는 거리도 공 크기에 비례해서 늘린다 (해상도가 클수록
+        # "가깝다"고 볼 수 있는 실제 픽셀 거리도 커진다).
+        ramp_dist = max(120, ball_radius * 8)
+        forward = int(np.clip(speed_limit * distance / ramp_dist, 18, speed_limit))
         forward = int(forward * max(0.40, math.cos(math.radians(abs(error)))))
         correction = int(np.clip(error * 0.30, -22, 22)) * self.steering_sign
         left_wheel = int(np.clip(forward + correction, -100, 100))
@@ -867,12 +877,12 @@ class HamsterSoccerApp:
                 elif current_mode == "r1":
                     if self.h2: self.h2.wheels(0, 0)
                     if r1_data:
-                        self.move_robot_to_target(self.h1, *r1_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R1')
+                        self.move_robot_to_target(self.h1, *r1_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R1', ball_radius=ball_radius)
                         cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (0, 255, 255), 2)
                 elif current_mode == "r2":
                     if self.h1: self.h1.wheels(0, 0)
                     if r2_data:
-                        self.move_robot_to_target(self.h2, *r2_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R2')
+                        self.move_robot_to_target(self.h2, *r2_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R2', ball_radius=ball_radius)
                         cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (0, 255, 255), 2)
                 else:  # 두 대 모드: 공에 더 가까운 한 대만 추적, 다른 한 대는 정지
                     candidates = []
@@ -884,7 +894,7 @@ class HamsterSoccerApp:
                         key, pose, robot = min(candidates, key=lambda item: math.dist(item[1][:2], (ball_x, ball_y)))
                         other = self.h2 if key == "r1" else self.h1
                         if other: other.wheels(0, 0)
-                        self.move_robot_to_target(robot, *pose, ball_x, ball_y, is_attacker=True, frame=frame, label=key.upper())
+                        self.move_robot_to_target(robot, *pose, ball_x, ball_y, is_attacker=True, frame=frame, label=key.upper(), ball_radius=ball_radius)
                         cv2.line(frame, (int(pose[0]), int(pose[1])), (ball_x, ball_y), (0, 255, 255), 2)
                         cv2.putText(frame, f"{key.upper()} CHASING BALL", (30, 110),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
