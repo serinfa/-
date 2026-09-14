@@ -21,7 +21,7 @@ class HamsterSoccerApp:
         self.button_color = "#7f8c8d"
         self.text_color = "white"
         self.title_font = font.Font(family="맑은 고딕", size=20, weight="bold")
-        self.score_font = font.Font(family="맑은 고딕", size=32, weight="bold")
+        self.score_font = font.Font(family="맑은 고딕", size=48, weight="bold")
         self.btn_font = font.Font(family="맑은 고딕", size=12, weight="bold")
         self.section_font = font.Font(family="맑은 고딕", size=11, weight="bold")
         self.status_font = font.Font(family="맑은 고딕", size=12, weight="bold")
@@ -75,6 +75,12 @@ class HamsterSoccerApp:
         self.goal_player_lower = np.array([95, 110, 70])
         self.goal_player_upper = np.array([135, 255, 255])
         self.min_goal_area = 800
+
+        # 공격 로봇이 공을 "상대(Player) 골대" 쪽으로 밀도록 유도하는 접근 전략 파라미터.
+        # 공만 보고 바로 돌진하면 접근 방향에 따라 자책골이 날 수 있어서,
+        # 골대 반대편(공 뒤쪽)으로 먼저 돌아가게 한 뒤에 공을 미는 방식을 사용한다.
+        self.attack_behind_offset = 55   # 공-골대 연장선에서 공 뒤쪽으로 경유할 거리(px)
+        self.attack_align_threshold = 45  # 이 거리 이내면 이미 공 뒤에 있다고 보고 바로 공을 밀어붙임
 
         self.score = {'ai': 0, 'player': 0}
         # 공이 골대 밖으로 나갔다가 다시 들어오기 전까지는 그 골대에서 재득점되지 않도록 하는 잠금 상태
@@ -196,10 +202,11 @@ class HamsterSoccerApp:
 
         score_row = tk.Frame(center_frame, bg=self.bg_color)
         score_row.pack(pady=(5, 0))
-        tk.Label(score_row, text="AI", bg=self.bg_color, fg="#ff6b6b", font=self.score_font).pack(side="left")
-        self.score_mid_label = tk.Label(score_row, text="  0 : 0  ", bg=self.bg_color, fg=self.text_color, font=self.score_font)
+        score_color = "#ff9500"
+        tk.Label(score_row, text="AI", bg=self.bg_color, fg=score_color, font=self.score_font).pack(side="left")
+        self.score_mid_label = tk.Label(score_row, text="  0 : 0  ", bg=self.bg_color, fg=score_color, font=self.score_font)
         self.score_mid_label.pack(side="left")
-        tk.Label(score_row, text="Player", bg=self.bg_color, fg="#74c0fc", font=self.score_font).pack(side="left")
+        tk.Label(score_row, text="Player", bg=self.bg_color, fg=score_color, font=self.score_font).pack(side="left")
 
         # 4. 연결/인식 상태 (실시간 상태등 + 카메라 재연결 + 하드웨어 점검)
         status_frame = self._section_frame(top_frame, "연결 / 인식 상태")
@@ -451,6 +458,32 @@ class HamsterSoccerApp:
             left_wheel = max(-100, min(100, speed + fine_turn))
             right_wheel = max(-100, min(100, speed - fine_turn))
             robot.wheels(left_wheel, right_wheel)
+
+    def _attacker_target(self, rx, ry, ball_x, ball_y, goal_center):
+        """공격 로봇이 실제로 향해야 할 좌표를 계산.
+
+        공만 보고 바로 돌진하면 로봇이 어느 방향에서 접근했느냐에 따라 우연히
+        자기 골대 쪽으로 공을 밀어버릴 수 있다. 이를 막기 위해 "공 - 상대 골대"
+        연장선에서 공 뒤쪽 지점을 먼저 목표로 삼아 로봇이 골대 반대편으로
+        돌아가게 하고, 이미 그 지점 근처(공을 사이에 두고 골대 반대편)에
+        있을 때만 공을 직접 향해 밀어붙인다. 골대 위치를 모르면(색상/드래그
+        지정이 모두 없는 경우) 예전처럼 공만 바로 쫓아간다.
+        """
+        if goal_center is None:
+            return ball_x, ball_y
+
+        gx, gy = goal_center
+        dx, dy = ball_x - gx, ball_y - gy
+        dist = math.hypot(dx, dy)
+        if dist < 1e-3:
+            return ball_x, ball_y
+
+        behind_x = ball_x + dx / dist * self.attack_behind_offset
+        behind_y = ball_y + dy / dist * self.attack_behind_offset
+
+        if math.hypot(rx - behind_x, ry - behind_y) < self.attack_align_threshold:
+            return ball_x, ball_y
+        return behind_x, behind_y
 
     def detect_ball(self, frame):
         """노란 공을 찾아 (x, y)를 반환. 못 찾으면 (-1, -1).
@@ -714,6 +747,17 @@ class HamsterSoccerApp:
             if self.is_playing and ball_x != -1:
                 self.check_goal(ball_x, ball_y, ai_goal_rect, player_goal_rect)
 
+            # 공격 목표(상대인 Player 골대 중심)와 수비 복귀 지점(자기 골대 중심)
+            player_goal_center = None
+            if player_goal_rect:
+                gx, gy, gw, gh = player_goal_rect
+                player_goal_center = (gx + gw / 2, gy + gh / 2)
+            if ai_goal_rect:
+                gx, gy, gw, gh = ai_goal_rect
+                defend_point = (gx + gw / 2, gy + gh / 2)
+            else:
+                defend_point = (280, 360)
+
             in_goal_pause = time.time() < self.goal_pause_until
 
             # --- 자율 주행 실행부 ---
@@ -730,12 +774,14 @@ class HamsterSoccerApp:
                 if ball_x != -1:
                     # 1번 로봇만 동작 모드
                     if current_mode == "r1" and r1_data:
-                        self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], ball_x, ball_y, is_attacker=True)
+                        atk_x, atk_y = self._attacker_target(r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
+                        self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True)
                         cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
 
                     # 2번 로봇만 동작 모드
                     elif current_mode == "r2" and r2_data:
-                        self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], ball_x, ball_y, is_attacker=True)
+                        atk_x, atk_y = self._attacker_target(r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
+                        self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True)
                         cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
 
                     # 두 대 모두 동작 모드
@@ -745,19 +791,23 @@ class HamsterSoccerApp:
                             dist2 = math.sqrt((r2_data[0] - ball_x)**2 + (r2_data[1] - ball_y)**2)
 
                             if dist1 < dist2:
-                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], ball_x, ball_y, is_attacker=True)
-                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], 280, 360, is_attacker=False)
+                                atk_x, atk_y = self._attacker_target(r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
+                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True)
+                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], defend_point[0], defend_point[1], is_attacker=False)
                                 cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                             else:
-                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], ball_x, ball_y, is_attacker=True)
-                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], 280, 360, is_attacker=False)
+                                atk_x, atk_y = self._attacker_target(r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
+                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True)
+                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], defend_point[0], defend_point[1], is_attacker=False)
                                 cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                         elif r1_data:
-                            self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], ball_x, ball_y, is_attacker=True)
+                            atk_x, atk_y = self._attacker_target(r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
+                            self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True)
                             cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                             if self.h2: self.h2.wheels(0, 0)
                         elif r2_data:
-                            self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], ball_x, ball_y, is_attacker=True)
+                            atk_x, atk_y = self._attacker_target(r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
+                            self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True)
                             cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                             if self.h1: self.h1.wheels(0, 0)
                 else:
