@@ -36,6 +36,12 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 VIDEO_LOOP_INTERVAL_MS = 15  # 화면 갱신 주기
 
+# 화면에는 원본 해상도(FRAME_WIDTH x FRAME_HEIGHT)를 그대로 보여주고,
+# MediaPipe 손 인식에는 이 축소된 사본만 넘겨서 연산량을 줄인다.
+# (랜드마크 좌표는 0~1 정규화 값이라 화질 손해 없이 원본 프레임에 그대로 매핑된다)
+HAND_DETECTION_WIDTH = 320
+HAND_DETECTION_HEIGHT = 240
+
 SERIAL_BAUDRATE = 115200
 SERIAL_TIMEOUT = 0.1
 SERIAL_BOOT_DELAY_SEC = 2.0  # 아두이노 재부팅 대기 시간
@@ -93,6 +99,7 @@ class CandyRobotApp:
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(
             max_num_hands=1,
+            model_complexity=0,  # 라이트 모델: 라즈베리파이 같은 저사양 환경에서 인식 속도 개선
             min_detection_confidence=0.7,
             min_tracking_confidence=0.7,
         )
@@ -317,7 +324,9 @@ class CandyRobotApp:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), BUTTON_COLOR_IDLE, 2)
                 cv2.putText(frame, cmd, (x1 + 15, y1 + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, BUTTON_COLOR_IDLE, 2)
 
-            hand_results = self.hands.process(rgb_frame)
+            # 화면 표시용 프레임은 원본 해상도 그대로 두고, 인식용으로만 축소된 사본을 사용한다.
+            detection_frame = cv2.resize(rgb_frame, (HAND_DETECTION_WIDTH, HAND_DETECTION_HEIGHT))
+            hand_results = self.hands.process(detection_frame)
             if hand_results.multi_hand_landmarks:
                 for hand_landmarks in hand_results.multi_hand_landmarks:
                     self.mp_draw.draw_landmarks(frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
