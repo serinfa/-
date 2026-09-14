@@ -546,6 +546,35 @@ class HamsterSoccerApp:
 
         return (ball_x, ball_y) if state == 'push' else (behind_x, behind_y)
 
+    def _avoid_ball_waypoint(self, rx, ry, tx, ty, ball_x, ball_y, safety_radius=45):
+        """수비 로봇이 자기 골대로 복귀하는 길에 공을 그대로 통과하면, 실수로
+        공을 자기 골대 쪽으로 밀어 자책골이 될 수 있다. 로봇->목표 직선이 공에
+        너무 가깝게 지나가면, 그 직선을 그대로 쓰지 않고 공을 옆으로 피해 가는
+        경유점을 대신 돌려준다. 공에서 충분히 멀리 지나가는 경로면 원래 목표를
+        그대로 돌려준다.
+        """
+        path_dx, path_dy = tx - rx, ty - ry
+        path_len_sq = path_dx * path_dx + path_dy * path_dy
+        if path_len_sq < 1e-6:
+            return tx, ty
+
+        # 로봇->목표 선분에서 공과 가장 가까운 지점(t=0 로봇, t=1 목표로 정규화)
+        t = ((ball_x - rx) * path_dx + (ball_y - ry) * path_dy) / path_len_sq
+        t = max(0.0, min(1.0, t))
+        closest_x = rx + path_dx * t
+        closest_y = ry + path_dy * t
+        dist_to_path = math.hypot(ball_x - closest_x, ball_y - closest_y)
+
+        # 공이 로봇을 이미 지나쳤거나(t~0) 경로에서 충분히 멀면 그대로 직진해도 안전
+        if dist_to_path >= safety_radius or t < 0.05:
+            return tx, ty
+
+        path_len = math.sqrt(path_len_sq)
+        nx, ny = -path_dy / path_len, path_dx / path_len
+        side = (ball_x - closest_x) * nx + (ball_y - closest_y) * ny
+        push_dir = -1 if side >= 0 else 1
+        return ball_x + nx * push_dir * safety_radius, ball_y + ny * push_dir * safety_radius
+
     def detect_ball(self, frame):
         """노란 공을 찾아 (x, y)를 반환. 못 찾으면 (-1, -1).
 
@@ -867,12 +896,14 @@ class HamsterSoccerApp:
                             if dist1 < dist2:
                                 atk_x, atk_y = self._attacker_target('r1', r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
                                 self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True)
-                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], defend_point[0], defend_point[1], is_attacker=False)
+                                def_x, def_y = self._avoid_ball_waypoint(r2_data[0], r2_data[1], defend_point[0], defend_point[1], ball_x, ball_y)
+                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], def_x, def_y, is_attacker=False)
                                 cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                             else:
                                 atk_x, atk_y = self._attacker_target('r2', r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
                                 self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True)
-                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], defend_point[0], defend_point[1], is_attacker=False)
+                                def_x, def_y = self._avoid_ball_waypoint(r1_data[0], r1_data[1], defend_point[0], defend_point[1], ball_x, ball_y)
+                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], def_x, def_y, is_attacker=False)
                                 cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                         elif r1_data:
                             atk_x, atk_y = self._attacker_target('r1', r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
