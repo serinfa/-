@@ -75,6 +75,13 @@ class HamsterSoccerApp:
         self.goal_player_lower = np.array([95, 110, 70])
         self.goal_player_upper = np.array([135, 255, 255])
         self.min_goal_area = 800
+        # 색상 인식이 한두 프레임 흔들려도 골대 위치가 뚝뚝 끊기지 않도록 마지막 위치를 잠깐 유지
+        # (공 추적의 ball_ema/max_lost_frames와 같은 방식). 이게 없으면 골대 인식이 잠깐씩
+        # 끊길 때마다 공격 목표가 "공 바로 앞"과 "저 멀리 골대 쪽 지점" 사이를 오락가락해서
+        # 로봇이 멀리서 방향을 못 잡고 헤매는 것처럼 보인다.
+        self.goal_rect_cache = {'ai': None, 'player': None}
+        self.goal_rect_lost_count = {'ai': 0, 'player': 0}
+        self.goal_rect_max_lost_frames = 20
 
         # 공격 로봇이 공을 "상대(Player) 골대" 쪽으로 밀도록 유도하는 접근 전략 파라미터.
         # 공만 보고 바로 돌진하면 접근 방향에 따라 자책골이 날 수 있어서,
@@ -345,6 +352,8 @@ class HamsterSoccerApp:
     def reset_goal_zones(self):
         self.manual_goal_rects = {'ai': None, 'player': None}
         self.goal_armed = {'ai': True, 'player': True}
+        self.goal_rect_cache = {'ai': None, 'player': None}
+        self.goal_rect_lost_count = {'ai': 0, 'player': 0}
         messagebox.showinfo("골대 위치 초기화", "골대 위치가 초기화되어 다시 색상(빨강/파랑) 자동 인식을 사용합니다.")
 
     def _calibrate_ball_at(self, fx, fy):
@@ -588,6 +597,19 @@ class HamsterSoccerApp:
                 best = c
         return cv2.boundingRect(best) if best is not None else None
 
+    def _stabilize_goal_rect(self, side, raw_rect):
+        """색상 기반 골대 인식이 한두 프레임 끊겨도 마지막 위치를 잠깐 유지."""
+        if raw_rect is not None:
+            self.goal_rect_cache[side] = raw_rect
+            self.goal_rect_lost_count[side] = 0
+            return raw_rect
+
+        self.goal_rect_lost_count[side] += 1
+        if self.goal_rect_cache[side] is not None and self.goal_rect_lost_count[side] <= self.goal_rect_max_lost_frames:
+            return self.goal_rect_cache[side]
+        self.goal_rect_cache[side] = None
+        return None
+
     def detect_goal_zones(self, frame):
         """AI 골대(빨강)와 플레이어 골대(파랑)의 사각형 범위를 찾아 화면에 표시.
 
@@ -607,11 +629,11 @@ class HamsterSoccerApp:
                     cv2.inRange(hsv, self.goal_ai_lower2, self.goal_ai_upper2),
                 )
                 red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
-                ai_rect = self._largest_zone_rect(red_mask)
+                ai_rect = self._stabilize_goal_rect('ai', self._largest_zone_rect(red_mask))
             if player_rect is None:
                 blue_mask = cv2.inRange(hsv, self.goal_player_lower, self.goal_player_upper)
                 blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
-                player_rect = self._largest_zone_rect(blue_mask)
+                player_rect = self._stabilize_goal_rect('player', self._largest_zone_rect(blue_mask))
 
         if ai_rect:
             x, y, w, h = ai_rect
