@@ -100,6 +100,8 @@ class HamsterSoccerApp:
         # 멀리서 방향을 못 잡고 헤매는 것을 줄인다. 각도는 원형(±180도 경계)이라
         # 값 자체가 아니라 단위벡터(cos, sin)에 EMA를 적용한다.
         self.robot_angle_ema = {'r1': None, 'r2': None}
+        # 마커 코너 좌표로 추정한 로봇 크기(px). 접촉 판정 거리 계산에 사용.
+        self.robot_marker_radius = {'r1': 40, 'r2': 40}
         self.robot_angle_alpha = 0.35
 
         self.score = {'ai': 0, 'player': 0}
@@ -486,24 +488,26 @@ class HamsterSoccerApp:
         if self.h1: self.h1.wheels(0, 0)
         if self.h2: self.h2.wheels(0, 0)
 
-    def move_robot_to_target(self, robot, rx, ry, rangle, tx, ty, is_attacker=True, frame=None, label="", ball_radius=15):
+    def move_robot_to_target(self, robot, rx, ry, rangle, tx, ty, is_attacker=True, frame=None, label="", ball_radius=15, robot_radius=40):
         """안정형 공 추적 제어. 큰 오차에서만 잠시 제자리 회전하고, 대부분은
         전진하면서 비례 조향한다. 따라서 각도 측정값이 조금 흔들려도 좌/우
         회전을 반복하지 않는다 (이전의 "제자리에서 계속 도는" 문제의 원인은
         30도만 넘으면 바로 최대 파워로 제자리 회전하는 방식 자체였다).
 
-        접촉 판정 거리(dead zone)는 공의 인식 반지름(ball_radius)에 비례해서
-        정한다. 실제 로봇이 카메라에 크게 잡히는 해상도에서는 "공에 붙어있는"
-        상태의 중심 간 거리가 수백 픽셀이 될 수 있는데, 고정값(예: 26px)으로는
-        전혀 닿지 않은 것으로 판단해서 공을 미는 순간에도 계속 각도를 재려고
-        제자리 회전을 반복하는 문제가 있었다.
+        접촉 판정 거리(dead zone)는 "로봇 반지름 + 공 반지름"으로 추정한다.
+        공 크기만 보고 크게(예: 3.5배) 잡았더니, 실제로 닿기 한참 전에 이미
+        "가깝다"고 오판해서 조향을 멈추고 그냥 직진해버렸다. 그러면 정렬이
+        안 된 채로 공 옆을 스쳐 지나가고, 멀어지면 다시 조향해서 돌아오고,
+        또 스쳐 지나가기를 반복해서 "공은 안 건드리고 로봇만 뱅뱅 도는"
+        것처럼 보이는 원인이 됐다. 로봇 마커의 실제 크기(robot_radius)를
+        반영해 접촉 거리를 더 정확하게(더 작게) 잡는다.
         """
         dx, dy = tx - rx, ty - ry
         distance = math.hypot(dx, dy)
         speed_limit = self.base_speed if is_attacker else int(self.base_speed * 0.70)
 
         # 공에 닿은 뒤에는 방향을 다시 잡으려 회전하지 말고 곧게 밀어준다.
-        contact_dist = max(30, ball_radius * 3.5)
+        contact_dist = max(25, robot_radius * 1.15 + ball_radius * 1.05)
         if distance < contact_dist:
             robot.wheels(speed_limit, speed_limit)
             self._draw_drive_debug(frame, label, rx, ry, 0.0, "PUSH", speed_limit, speed_limit)
@@ -837,13 +841,22 @@ class HamsterSoccerApp:
                         cv2.putText(frame, f"ID:{marker_id}", (cx - 15, cy + 35),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
 
+                    # 마커 코너의 대각선 절반을 로봇 크기로 추정. 마커 스티커는
+                    # 로봇 몸체보다 작게 붙어 있으므로 약간 키워서 몸체 크기에
+                    # 가깝게 맞춘다 (접촉 판정 거리 계산에 쓰임).
+                    marker_w = c[:, 0].max() - c[:, 0].min()
+                    marker_h = c[:, 1].max() - c[:, 1].min()
+                    marker_radius = math.hypot(marker_w, marker_h) / 2.0 * 1.5
+
                     if marker_id == self.robot_marker_ids['r1']:
                         r1_data = (cx, cy, self._smooth_angle('r1', angle))
                         self.detected_status['r1'] = True
+                        self.robot_marker_radius['r1'] = marker_radius
                         cv2.putText(frame, f"R1 (ID{self.robot_marker_ids['r1']})", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
                     elif marker_id == self.robot_marker_ids['r2']:
                         r2_data = (cx, cy, self._smooth_angle('r2', angle))
                         self.detected_status['r2'] = True
+                        self.robot_marker_radius['r2'] = marker_radius
                         cv2.putText(frame, f"R2 (ID{self.robot_marker_ids['r2']})", (cx-20, cy-20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
             elif debug_on:
                 cv2.putText(frame, "NO ARUCO MARKERS DETECTED", (30, 80),
@@ -877,12 +890,12 @@ class HamsterSoccerApp:
                 elif current_mode == "r1":
                     if self.h2: self.h2.wheels(0, 0)
                     if r1_data:
-                        self.move_robot_to_target(self.h1, *r1_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R1', ball_radius=ball_radius)
+                        self.move_robot_to_target(self.h1, *r1_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R1', ball_radius=ball_radius, robot_radius=self.robot_marker_radius['r1'])
                         cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (0, 255, 255), 2)
                 elif current_mode == "r2":
                     if self.h1: self.h1.wheels(0, 0)
                     if r2_data:
-                        self.move_robot_to_target(self.h2, *r2_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R2', ball_radius=ball_radius)
+                        self.move_robot_to_target(self.h2, *r2_data, ball_x, ball_y, is_attacker=True, frame=frame, label='R2', ball_radius=ball_radius, robot_radius=self.robot_marker_radius['r2'])
                         cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (0, 255, 255), 2)
                 else:  # 두 대 모드: 공에 더 가까운 한 대만 추적, 다른 한 대는 정지
                     candidates = []
@@ -894,7 +907,7 @@ class HamsterSoccerApp:
                         key, pose, robot = min(candidates, key=lambda item: math.dist(item[1][:2], (ball_x, ball_y)))
                         other = self.h2 if key == "r1" else self.h1
                         if other: other.wheels(0, 0)
-                        self.move_robot_to_target(robot, *pose, ball_x, ball_y, is_attacker=True, frame=frame, label=key.upper(), ball_radius=ball_radius)
+                        self.move_robot_to_target(robot, *pose, ball_x, ball_y, is_attacker=True, frame=frame, label=key.upper(), ball_radius=ball_radius, robot_radius=self.robot_marker_radius[key])
                         cv2.line(frame, (int(pose[0]), int(pose[1])), (ball_x, ball_y), (0, 255, 255), 2)
                         cv2.putText(frame, f"{key.upper()} CHASING BALL", (30, 110),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
