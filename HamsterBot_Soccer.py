@@ -92,6 +92,7 @@ class HamsterSoccerApp:
         self.min_steer_dist = 20         # 목표까지 이 거리(px) 이내면 각도 보정 없이 그냥 직진 (제자리 회전 방지)
         self.attack_state = {}           # 로봇별 'position'(공 뒤로 돌기) / 'push'(공 밀기) 상태
         self.turn_sign = {}              # 로봇별 마지막 회전 방향(+1/-1) - 목표가 정반대일 때 방향 뒤집힘 방지용
+        self.turn_mode = {}              # 로봇별 "제자리 회전 중" 여부 - 30/15도 히스테리시스로 모드 전환 떨림 방지
 
         # 로봇 방향(각도) 스무딩용. 마커 각도는 코너 4개 중 2개만으로 계산되는
         # 값이라 코너 검출이 1~2픽셀만 흔들려도 각도가 크게 튄다(마커가 화면에
@@ -489,11 +490,22 @@ class HamsterSoccerApp:
 
         speed = self.base_speed if is_attacker else int(self.base_speed * 0.7)
 
-        if abs(angle_diff) > 30:
-            turn_speed = int(angle_diff * 0.5)
+        # 제자리 회전 모드로 "들어가는" 각도(30도)와 "빠져나오는" 각도(15도)를
+        # 다르게 둔다(히스테리시스). 경계값 하나만 쓰면 각도가 그 값 근처에서
+        # 살짝만 흔들려도 두 제어 방식(제자리 회전 <-> 전진하며 미세 조향) 사이를
+        # 매 프레임 오가게 되어, 처음 시작할 때처럼 회전이 필요한 순간에 좌우로
+        # 계속 왔다갔다하는 것처럼 보일 수 있다.
+        in_turn_mode = self.turn_mode.get(robot_key, False)
+        in_turn_mode = abs(angle_diff) > 15 if in_turn_mode else abs(angle_diff) > 30
+        self.turn_mode[robot_key] = in_turn_mode
+
+        if in_turn_mode:
+            # 회전 이득/최대 속도를 낮춰서 한 번에 목표 각도를 확 지나쳐버리고
+            # 반대로 다시 도는 오버슈트 진동을 줄인다.
+            turn_speed = int(angle_diff * 0.35)
             # 만약 로봇이 제자리에서 반대 방향으로 돈다면 아래의 turn_speed 와 -turn_speed 를 맞바꾸세요.
-            left_wheel = max(-100, min(100, turn_speed))
-            right_wheel = max(-100, min(100, -turn_speed))
+            left_wheel = max(-70, min(70, turn_speed))
+            right_wheel = max(-70, min(70, -turn_speed))
             robot.wheels(left_wheel, right_wheel)
         else:
             fine_turn = int(angle_diff * 0.3)
