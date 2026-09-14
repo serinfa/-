@@ -461,7 +461,7 @@ class HamsterSoccerApp:
             if self.h2: self.h2.stop()
             messagebox.showinfo("경기 종료", "경기 시간이 끝났습니다!")
 
-    def move_robot_to_target(self, robot, rx, ry, rangle, tx, ty, is_attacker=True):
+    def move_robot_to_target(self, robot, rx, ry, rangle, tx, ty, is_attacker=True, frame=None, label=""):
         dx = tx - rx
         dy = ty - ry
 
@@ -471,6 +471,7 @@ class HamsterSoccerApp:
         if math.hypot(dx, dy) < self.min_steer_dist:
             speed = self.base_speed if is_attacker else int(self.base_speed * 0.7)
             robot.wheels(speed, speed)
+            self._draw_drive_debug(frame, label, rx, ry, 0.0, "DEAD_ZONE", speed, speed)
             return
 
         target_angle = math.degrees(math.atan2(dy, dx))
@@ -510,11 +511,23 @@ class HamsterSoccerApp:
             left_wheel = max(-70, min(70, -turn_speed))
             right_wheel = max(-70, min(70, turn_speed))
             robot.wheels(left_wheel, right_wheel)
+            self._draw_drive_debug(frame, label, rx, ry, angle_diff, "TURN", left_wheel, right_wheel)
         else:
             fine_turn = int(angle_diff * 0.3)
             left_wheel = max(-100, min(100, speed - fine_turn))
             right_wheel = max(-100, min(100, speed + fine_turn))
             robot.wheels(left_wheel, right_wheel)
+            self._draw_drive_debug(frame, label, rx, ry, angle_diff, "DRIVE", left_wheel, right_wheel)
+
+    def _draw_drive_debug(self, frame, label, rx, ry, angle_diff, mode, left_wheel, right_wheel):
+        """디버그 모드에서 실제로 로봇에 보내는 바퀴 명령값을 화면에 표시.
+        코드 로직 문제인지(값이 이상함) 하드웨어/통신 문제인지(값은 정상인데
+        로봇이 다르게 움직임) 구분하는 데 사용."""
+        if frame is None or not self.show_debug.get():
+            return
+        text = f"{label} {mode} diff={angle_diff:.0f} L={left_wheel} R={right_wheel}"
+        cv2.putText(frame, text, (int(rx) - 60, int(ry) + 55),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2)
 
     def _attacker_target(self, robot_key, rx, ry, ball_x, ball_y, goal_center):
         """공격 로봇이 실제로 향해야 할 좌표를 계산.
@@ -930,13 +943,13 @@ class HamsterSoccerApp:
                     # 1번 로봇만 동작 모드
                     if current_mode == "r1" and r1_data:
                         atk_x, atk_y = self._attacker_target('r1', r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
-                        self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True)
+                        self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R1')
                         cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
 
                     # 2번 로봇만 동작 모드
                     elif current_mode == "r2" and r2_data:
                         atk_x, atk_y = self._attacker_target('r2', r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
-                        self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True)
+                        self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R2')
                         cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
 
                     # 두 대 모두 동작 모드
@@ -947,24 +960,24 @@ class HamsterSoccerApp:
 
                             if dist1 < dist2:
                                 atk_x, atk_y = self._attacker_target('r1', r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
-                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True)
+                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R1')
                                 def_x, def_y = self._avoid_ball_waypoint(r2_data[0], r2_data[1], defend_point[0], defend_point[1], ball_x, ball_y)
-                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], def_x, def_y, is_attacker=False)
+                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], def_x, def_y, is_attacker=False, frame=frame, label='R2')
                                 cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                             else:
                                 atk_x, atk_y = self._attacker_target('r2', r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
-                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True)
+                                self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R2')
                                 def_x, def_y = self._avoid_ball_waypoint(r1_data[0], r1_data[1], defend_point[0], defend_point[1], ball_x, ball_y)
-                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], def_x, def_y, is_attacker=False)
+                                self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], def_x, def_y, is_attacker=False, frame=frame, label='R1')
                                 cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                         elif r1_data:
                             atk_x, atk_y = self._attacker_target('r1', r1_data[0], r1_data[1], ball_x, ball_y, player_goal_center)
-                            self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True)
+                            self.move_robot_to_target(self.h1, r1_data[0], r1_data[1], r1_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R1')
                             cv2.line(frame, (int(r1_data[0]), int(r1_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                             if self.h2: self.h2.wheels(0, 0)
                         elif r2_data:
                             atk_x, atk_y = self._attacker_target('r2', r2_data[0], r2_data[1], ball_x, ball_y, player_goal_center)
-                            self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True)
+                            self.move_robot_to_target(self.h2, r2_data[0], r2_data[1], r2_data[2], atk_x, atk_y, is_attacker=True, frame=frame, label='R2')
                             cv2.line(frame, (int(r2_data[0]), int(r2_data[1])), (ball_x, ball_y), (255, 255, 0), 1, cv2.LINE_AA)
                             if self.h1: self.h1.wheels(0, 0)
                 else:
