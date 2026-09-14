@@ -82,6 +82,13 @@ class HamsterSoccerApp:
         self.goal_flash_text = None
         self.goal_flash_until = 0.0
 
+        # 골대 위치를 색상 대신 영상에서 직접 드래그로 지정한 경우 (x, y, w, h), 원본 프레임 좌표 기준.
+        # None이면 해당 골대는 색상(빨강/파랑) 자동 인식을 사용.
+        self.manual_goal_rects = {'ai': None, 'player': None}
+        self.goal_pick_side = None       # 드래그로 지정 중인 골대: 'ai' / 'player' / None
+        self.goal_drag_start = None
+        self.goal_drag_current = None
+
         # 밝기 채널만 평준화해서 색상(H)은 건드리지 않고 조명 변화에 대한 민감도를 낮춘다
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
@@ -202,9 +209,27 @@ class HamsterSoccerApp:
         tk.Checkbutton(status_frame, text="디버그 정보 표시", variable=self.show_debug,
                         bg="white", font=self.status_font).pack(anchor="w", pady=(3, 0))
 
+        # 5. 골대 위치 설정 (영상 위에서 드래그로 직접 지정, 지정 안 하면 색상 자동 인식 사용)
+        goal_setup_frame = self._section_frame(self.root, "골대 위치 설정 (영상에서 드래그, 미지정 시 색상 자동 인식)")
+        goal_setup_frame.pack(fill="x", padx=20, pady=(0, 10))
+        goal_btn_row = tk.Frame(goal_setup_frame, bg="white")
+        goal_btn_row.pack()
+        self.btn_set_ai_goal = tk.Button(goal_btn_row, text="AI 골대 지정", bg="#e74c3c", fg="white",
+                                          font=self.btn_font, width=14, relief="raised", bd=3,
+                                          command=lambda: self.start_goal_pick('ai'))
+        self.btn_set_ai_goal.pack(side="left", padx=5)
+        self.btn_set_player_goal = tk.Button(goal_btn_row, text="Player 골대 지정", bg="#3b82f6", fg="white",
+                                              font=self.btn_font, width=14, relief="raised", bd=3,
+                                              command=lambda: self.start_goal_pick('player'))
+        self.btn_set_player_goal.pack(side="left", padx=5)
+        tk.Button(goal_btn_row, text="골대 위치 초기화(색상 인식 복귀)", bg=self.bg_color, fg=self.text_color,
+                  font=self.btn_font, width=24, relief="raised", bd=3, command=self.reset_goal_zones).pack(side="left", padx=5)
+
         self.video_label = tk.Label(self.root, bg=self.bg_color)
         self.video_label.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-        self.video_label.bind("<Button-1>", self.on_video_click)
+        self.video_label.bind("<ButtonPress-1>", self.on_video_press)
+        self.video_label.bind("<B1-Motion>", self.on_video_drag)
+        self.video_label.bind("<ButtonRelease-1>", self.on_video_release)
 
         self.update_status_indicators()
 
@@ -244,18 +269,80 @@ class HamsterSoccerApp:
         self.calibrating = True
         self.btn_calibrate.config(text="공을 클릭하세요...", bg="orange")
 
-    def on_video_click(self, event):
-        if not self.calibrating or self.current_hsv is None:
-            return
-
+    def _to_frame_coords(self, disp_x, disp_y):
+        """화면에 표시된(리사이즈된) 좌표를 실제 카메라 프레임 좌표로 환산."""
         orig_h, orig_w = self.orig_frame_shape
         disp_w, disp_h = self.disp_size
         if orig_w == 0 or orig_h == 0 or disp_w == 0 or disp_h == 0:
+            return None, None
+        fx = int(disp_x * orig_w / disp_w)
+        fy = int(disp_y * orig_h / disp_h)
+        fx = max(0, min(orig_w - 1, fx))
+        fy = max(0, min(orig_h - 1, fy))
+        return fx, fy
+
+    def on_video_press(self, event):
+        if self.calibrating:
+            fx, fy = self._to_frame_coords(event.x, event.y)
+            if fx is not None:
+                self._calibrate_ball_at(fx, fy)
+            return
+        if self.goal_pick_side:
+            fx, fy = self._to_frame_coords(event.x, event.y)
+            if fx is not None:
+                self.goal_drag_start = (fx, fy)
+                self.goal_drag_current = (fx, fy)
+
+    def on_video_drag(self, event):
+        if self.goal_pick_side and self.goal_drag_start:
+            fx, fy = self._to_frame_coords(event.x, event.y)
+            if fx is not None:
+                self.goal_drag_current = (fx, fy)
+
+    def on_video_release(self, event):
+        if not (self.goal_pick_side and self.goal_drag_start):
             return
 
-        # 화면에 표시된(리사이즈된) 좌표를 실제 카메라 프레임 좌표로 환산
-        fx = int(event.x * orig_w / disp_w)
-        fy = int(event.y * orig_h / disp_h)
+        fx, fy = self._to_frame_coords(event.x, event.y)
+        if fx is None:
+            fx, fy = self.goal_drag_current
+
+        x0, y0 = self.goal_drag_start
+        x, y = min(x0, fx), min(y0, fy)
+        w, h = abs(fx - x0), abs(fy - y0)
+        side = self.goal_pick_side
+
+        if w < 10 or h < 10:
+            messagebox.showwarning("골대 지정", "너무 작게 선택했습니다. 다시 드래그해 주세요.")
+        else:
+            self.manual_goal_rects[side] = (x, y, w, h)
+            self.goal_armed[side] = True
+            label = "AI" if side == 'ai' else "Player"
+            messagebox.showinfo("골대 지정 완료", f"{label} 골대 위치가 저장되었습니다.")
+
+        btn = self.btn_set_ai_goal if side == 'ai' else self.btn_set_player_goal
+        btn.config(text=("AI 골대 지정" if side == 'ai' else "Player 골대 지정"),
+                   bg=("#e74c3c" if side == 'ai' else "#3b82f6"))
+        self.goal_pick_side = None
+        self.goal_drag_start = None
+        self.goal_drag_current = None
+
+    def start_goal_pick(self, side):
+        self.goal_pick_side = side
+        self.goal_drag_start = None
+        self.goal_drag_current = None
+        btn = self.btn_set_ai_goal if side == 'ai' else self.btn_set_player_goal
+        btn.config(text="영상에서 드래그하세요...", bg="orange")
+
+    def reset_goal_zones(self):
+        self.manual_goal_rects = {'ai': None, 'player': None}
+        self.goal_armed = {'ai': True, 'player': True}
+        messagebox.showinfo("골대 위치 초기화", "골대 위치가 초기화되어 다시 색상(빨강/파랑) 자동 인식을 사용합니다.")
+
+    def _calibrate_ball_at(self, fx, fy):
+        if self.current_hsv is None:
+            return
+        orig_h, orig_w = self.orig_frame_shape
         fx = max(5, min(orig_w - 6, fx))
         fy = max(5, min(orig_h - 6, fy))
 
@@ -445,21 +532,29 @@ class HamsterSoccerApp:
         return cv2.boundingRect(best) if best is not None else None
 
     def detect_goal_zones(self, frame):
-        """빨간 영역(AI 골대)과 파란 영역(플레이어 골대)의 사각형 범위를 찾아 화면에 표시."""
-        hsv = self.current_hsv if self.current_hsv is not None else cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        """AI 골대(빨강)와 플레이어 골대(파랑)의 사각형 범위를 찾아 화면에 표시.
 
-        red_mask = cv2.bitwise_or(
-            cv2.inRange(hsv, self.goal_ai_lower1, self.goal_ai_upper1),
-            cv2.inRange(hsv, self.goal_ai_lower2, self.goal_ai_upper2),
-        )
-        blue_mask = cv2.inRange(hsv, self.goal_player_lower, self.goal_player_upper)
+        영상에서 드래그로 직접 지정한 골대(self.manual_goal_rects)가 있으면 그 고정된
+        위치를 그대로 쓰고, 지정하지 않은 골대만 색상(빨강/파랑) 자동 인식으로 찾는다.
+        """
+        ai_rect = self.manual_goal_rects['ai']
+        player_rect = self.manual_goal_rects['player']
 
-        kernel = np.ones((7, 7), np.uint8)
-        red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
-        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
+        if ai_rect is None or player_rect is None:
+            hsv = self.current_hsv if self.current_hsv is not None else cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        ai_rect = self._largest_zone_rect(red_mask)
-        player_rect = self._largest_zone_rect(blue_mask)
+            kernel = np.ones((7, 7), np.uint8)
+            if ai_rect is None:
+                red_mask = cv2.bitwise_or(
+                    cv2.inRange(hsv, self.goal_ai_lower1, self.goal_ai_upper1),
+                    cv2.inRange(hsv, self.goal_ai_lower2, self.goal_ai_upper2),
+                )
+                red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+                ai_rect = self._largest_zone_rect(red_mask)
+            if player_rect is None:
+                blue_mask = cv2.inRange(hsv, self.goal_player_lower, self.goal_player_upper)
+                blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel)
+                player_rect = self._largest_zone_rect(blue_mask)
 
         if ai_rect:
             x, y, w, h = ai_rect
@@ -469,6 +564,13 @@ class HamsterSoccerApp:
             x, y, w, h = player_rect
             cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 120, 0), 2)
             cv2.putText(frame, "PLAYER GOAL", (x, max(20, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 120, 0), 2)
+
+        # 드래그로 영역을 지정하는 중이면 실시간 미리보기 사각형을 그림
+        if self.goal_pick_side and self.goal_drag_start and self.goal_drag_current:
+            x0, y0 = self.goal_drag_start
+            x1, y1 = self.goal_drag_current
+            preview_color = (0, 0, 255) if self.goal_pick_side == 'ai' else (255, 120, 0)
+            cv2.rectangle(frame, (x0, y0), (x1, y1), preview_color, 2)
 
         return ai_rect, player_rect
 
