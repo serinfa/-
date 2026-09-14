@@ -88,6 +88,7 @@ class HamsterSoccerApp:
         # 골대 반대편(공 뒤쪽)으로 먼저 돌아가게 한 뒤에 공을 미는 방식을 사용한다.
         self.attack_behind_offset = 55   # 공-골대 연장선에서 공 뒤쪽으로 경유할 거리(px)
         self.attack_align_threshold = 45  # 이 거리 이내면 이미 공 뒤에 있다고 보고 바로 공을 밀어붙임
+        self.overshoot_margin = 20       # 실제로 공을 밀고 있을 때(로봇 몸체 크기)는 자책골 안전장치가 안 걸리도록 두는 여유
         self.min_steer_dist = 20         # 목표까지 이 거리(px) 이내면 각도 보정 없이 그냥 직진 (제자리 회전 방지)
         self.attack_state = {}           # 로봇별 'position'(공 뒤로 돌기) / 'push'(공 밀기) 상태
         self.turn_sign = {}              # 로봇별 마지막 회전 방향(+1/-1) - 목표가 정반대일 때 방향 뒤집힘 방지용
@@ -502,6 +503,11 @@ class HamsterSoccerApp:
         진입/이탈 거리를 다르게 둔다(히스테리시스). 매 프레임 거리 하나로만
         판단하면 경계 근처에서 두 목표가 계속 번갈아 바뀌어 로봇이 공 앞에서
         제자리 회전하는 것처럼 보이는 문제가 있었다.
+
+        추가 안전장치: 밀기 모드 중에도 로봇이 공을 지나쳐서
+        "내 골대 - 공 - 로봇" 순서(자책골 위험 구간)가 되면, 히스테리시스와
+        무관하게 즉시 다시 공 뒤로 돌아가게 한다. 그래야 공이 다시
+        로봇 앞쪽(상대 골대 방향)에 오게 된다.
         """
         if goal_center is None:
             self.attack_state[robot_key] = 'push'
@@ -512,10 +518,21 @@ class HamsterSoccerApp:
         dist = math.hypot(dx, dy)
         if dist < 1e-3:
             return ball_x, ball_y
+        ux, uy = dx / dist, dy / dist  # 상대 골대 -> 공 방향(=우리 골대 쪽) 단위벡터
 
-        behind_x = ball_x + dx / dist * self.attack_behind_offset
-        behind_y = ball_y + dy / dist * self.attack_behind_offset
+        behind_x = ball_x + ux * self.attack_behind_offset
+        behind_y = ball_y + uy * self.attack_behind_offset
         dist_to_behind = math.hypot(rx - behind_x, ry - behind_y)
+
+        # 공 기준으로 로봇이 이 단위벡터 방향(우리 골대 쪽)에 있으면 양수,
+        # 상대 골대 쪽으로 공을 지나쳐 있으면 음수 -> 자책골 위험 구간.
+        # 실제로 공에 붙어서 미는 중에는 로봇 몸체 크기 때문에 약간 음수로 나올 수
+        # 있어서, overshoot_margin만큼은 정상적인 밀기로 봐준다.
+        overshoot = (rx - ball_x) * ux + (ry - ball_y) * uy
+
+        if overshoot < -self.overshoot_margin:
+            self.attack_state[robot_key] = 'position'
+            return behind_x, behind_y
 
         state = self.attack_state.get(robot_key, 'position')
         if state == 'push':
