@@ -145,13 +145,17 @@ class HamsterSoccerApp:
         self.aruco_params.adaptiveThreshWinSizeStep = 4
         self.aruco_params.minMarkerPerimeterRate = 0.02
         self.aruco_params.cornerRefinementMethod = aruco.CORNER_REFINE_SUBPIX
-        # 완전히 안 잡히는(후보로도 안 걸리는) 마커를 위한 추가 완화:
-        # 기울어진 각도/블러/조명 얼룩으로 정사각형 윤곽이 살짝 틀어지거나
-        # 테두리 셀 일부가 오염돼도 후보로 살아남도록 허용 폭을 넓힘.
-        self.aruco_params.polygonalApproxAccuracyRate = 0.06
-        self.aruco_params.maxErroneousBitsInBorderRate = 0.5
-        self.aruco_params.perspectiveRemoveIgnoredMarginPerCell = 0.20
-        self.aruco_params.minOtsuStdDev = 3.0
+        # 기울어진 각도/블러로 정사각형 윤곽이 살짝 틀어져도 후보로 살아남도록
+        # 약간만 완화(기본값보다 조금 넉넉한 정도). 이전에는 이 값들을 훨씬 크게
+        # 풀어뒀었는데(특히 maxErroneousBitsInBorderRate=0.5는 테두리 절반이
+        # 틀려도 마커로 인정할 만큼 관대함), 그 결과 나사머리/그림자 같은 잡음이
+        # 로봇 마커와 같은 ID로 오탐되어 로봇이 방향을 못 잡고 헤매는 원인이 됐다.
+        # 실제 "마커 인식 안 됨" 문제의 진짜 원인은 마커가 다른 ID로 인쇄된
+        # 것이었어서(딕셔너리/인식 문제 아님), 여기는 다시 기본값에 가깝게 되돌린다.
+        self.aruco_params.polygonalApproxAccuracyRate = 0.04
+        self.aruco_params.maxErroneousBitsInBorderRate = 0.35
+        self.aruco_params.perspectiveRemoveIgnoredMarginPerCell = 0.15
+        self.aruco_params.minOtsuStdDev = 4.0
 
         if self.is_new_cv2:
             self.aruco_detector = aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
@@ -839,20 +843,29 @@ class HamsterSoccerApp:
                     cv2.putText(frame, f"Detected marker IDs: {detected_ids}", (30, 80),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
+                # 완화된 인식 파라미터 때문에 나사머리/그림자 등 잡음이 같은 ID로
+                # 오탐되어, 한 프레임에 같은 ID가 두 개 이상 잡히는 경우가 있다.
+                # 그대로 두면 마지막에 처리된 후보로 덮어써져서 진짜 위치와 잡음
+                # 위치 사이를 매 프레임 오갈 수 있으므로, 같은 ID는 면적이 가장
+                # 큰(=진짜 마커일 가능성이 높은) 후보 하나만 채택한다.
+                best_by_id = {}
                 for i, marker_id in enumerate(ids.flatten()):
                     c = corners[i][0]
-                    cx = int(np.mean(c[:, 0]))
-                    cy = int(np.mean(c[:, 1]))
+                    area = cv2.contourArea(c.astype(np.float32))
+                    marker_id = int(marker_id)
+                    if marker_id not in best_by_id or area > best_by_id[marker_id][0]:
+                        cx = int(np.mean(c[:, 0]))
+                        cy = int(np.mean(c[:, 1]))
+                        front_x = (c[0][0] + c[1][0]) / 2.0
+                        front_y = (c[0][1] + c[1][1]) / 2.0
+                        angle = math.degrees(math.atan2(front_y - cy, front_x - cx))
+                        best_by_id[marker_id] = (area, cx, cy, angle, c, front_x, front_y)
 
-                    front_x = (c[0][0] + c[1][0]) / 2.0
-                    front_y = (c[0][1] + c[1][1]) / 2.0
-
-                    angle = math.degrees(math.atan2(front_y - cy, front_x - cx))
-
+                for marker_id, (area, cx, cy, angle, c, front_x, front_y) in best_by_id.items():
                     cv2.polylines(frame, [c.astype(np.int32)], True, (0, 255, 0), 2)
                     cv2.arrowedLine(frame, (cx, cy), (int(front_x), int(front_y)), (0, 0, 255), 3, tipLength=0.3)
                     if debug_on:
-                        cv2.putText(frame, f"ID:{int(marker_id)}", (cx - 15, cy + 35),
+                        cv2.putText(frame, f"ID:{marker_id}", (cx - 15, cy + 35),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
 
                     if marker_id == self.robot_marker_ids['r1']:
