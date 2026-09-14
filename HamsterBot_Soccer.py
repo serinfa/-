@@ -39,9 +39,9 @@ class HamsterSoccerApp:
         self.heading_offset_deg = 0
         # 로봇이 목표와 반대쪽으로 돌 때만 -1로 바꾸세요.
         # Hamster 기본 바퀴 방향에서는 1이 맞습니다.
-        # -> 실측 결과 이 로봇은 반대 방향으로 계속 돌아서(선이 가리키는 방향으로
-        # 수렴하지 못하고 오차가 줄지 않음) -1로 설정.
-        self.steering_sign = -1
+        # -> -1로 바꿔도 계속 멈추지 않고 돌아서, 단순 부호 문제가 아닌 것으로
+        # 보여 일단 기본값(1)으로 되돌림. 디버그 표시로 실제 값 확인 필요.
+        self.steering_sign = 1
         self.last_turn_sign = {}         # 로봇별 마지막 회전 방향(+1/-1) - 목표가 정반대일 때 방향 뒤집힘 방지용
 
         self.detected_status = {'ball': False, 'r1': False, 'r2': False, 'camera': False}
