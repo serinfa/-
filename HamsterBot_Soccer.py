@@ -215,7 +215,7 @@ class HamsterSoccerApp:
         self.btn_calibrate.pack(pady=3, fill="x")
 
         # 골대 위치: 영상에서 드래그로 직접 지정 (미지정 시 색상 자동 인식)
-        tk.Label(robot_frame, text="골대 지정(영상 드래그)", bg="white", font=self.status_font).pack(anchor="w", pady=(4, 0))
+        tk.Label(robot_frame, text="골대 지정(클릭=자동인식/드래그=직접지정)", bg="white", font=self.status_font).pack(anchor="w", pady=(4, 0))
         goal_btn_row = tk.Frame(robot_frame, bg="white")
         goal_btn_row.pack(pady=(3, 0), fill="x")
         self.btn_set_ai_goal = tk.Button(goal_btn_row, text="AI골대", bg=self.button_color, fg="white",
@@ -392,13 +392,26 @@ class HamsterSoccerApp:
         x, y = min(x0, fx), min(y0, fy)
         w, h = abs(fx - x0), abs(fy - y0)
         side = self.goal_pick_side
+        label = "AI" if side == 'ai' else "Player"
 
-        if w < 10 or h < 10:
-            messagebox.showwarning("골대 지정", "너무 작게 선택했습니다. 다시 드래그해 주세요.")
+        if w < 10 and h < 10:
+            # 드래그 없이 클릭만 한 경우: 클릭 지점의 색상과 연결된 영역을 찾아
+            # 그 영역의 경계 사각형을 골대 위치로 자동 지정한다.
+            rect = self._auto_detect_goal_rect(x0, y0)
+            if rect is None:
+                messagebox.showwarning(
+                    "골대 지정",
+                    "클릭한 위치에서 색상 영역을 찾지 못했습니다.\n골대 안쪽(바닥과 색이 다른 부분)을 클릭하거나, 드래그로 직접 범위를 지정해 주세요."
+                )
+            else:
+                self.manual_goal_rects[side] = rect
+                self.goal_armed[side] = True
+                messagebox.showinfo("골대 지정 완료", f"{label} 골대 위치가 클릭 지점 기준으로 자동 인식되었습니다.")
+        elif w < 10 or h < 10:
+            messagebox.showwarning("골대 지정", "너무 작게 선택했습니다. 다시 드래그하거나 한 번만 클릭해 주세요.")
         else:
             self.manual_goal_rects[side] = (x, y, w, h)
             self.goal_armed[side] = True
-            label = "AI" if side == 'ai' else "Player"
             messagebox.showinfo("골대 지정 완료", f"{label} 골대 위치가 저장되었습니다.")
 
         btn = self.btn_set_ai_goal if side == 'ai' else self.btn_set_player_goal
@@ -407,12 +420,45 @@ class HamsterSoccerApp:
         self.goal_drag_start = None
         self.goal_drag_current = None
 
+    def _auto_detect_goal_rect(self, fx, fy):
+        """클릭 지점 주변 색상을 기준으로 연결된 영역을 찾아 경계 사각형을 반환.
+        공 색상 보정(_calibrate_ball_at)과 같은 방식으로 클릭 지점의 HSV
+        평균/표준편차로 범위를 잡은 뒤, 그 범위의 마스크에서 클릭 지점을
+        포함하는 윤곽선 하나만 골라 boundingRect를 구한다."""
+        if self.current_hsv is None:
+            return None
+        orig_h, orig_w = self.orig_frame_shape
+        if orig_h == 0 or orig_w == 0:
+            return None
+        fx = max(5, min(orig_w - 6, fx))
+        fy = max(5, min(orig_h - 6, fy))
+
+        patch = self.current_hsv[fy - 5:fy + 5, fx - 5:fx + 5].reshape(-1, 3)
+        h_mean, s_mean, v_mean = patch.mean(axis=0)
+        h_std, s_std, v_std = patch.std(axis=0)
+
+        h_margin = max(10, h_std * 2.5)
+        s_margin = max(50, s_std * 2.5)
+        v_margin = max(50, v_std * 2.5)
+
+        lower = np.array([max(0, h_mean - h_margin), max(0, s_mean - s_margin), max(0, v_mean - v_margin)])
+        upper = np.array([min(179, h_mean + h_margin), 255, 255])
+        mask = cv2.inRange(self.current_hsv, lower, upper)
+        kernel = np.ones((7, 7), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            if cv2.pointPolygonTest(c, (float(fx), float(fy)), False) >= 0 and cv2.contourArea(c) >= self.min_goal_area:
+                return cv2.boundingRect(c)
+        return None
+
     def start_goal_pick(self, side):
         self.goal_pick_side = side
         self.goal_drag_start = None
         self.goal_drag_current = None
         btn = self.btn_set_ai_goal if side == 'ai' else self.btn_set_player_goal
-        btn.config(text="드래그...", bg="orange")
+        btn.config(text="클릭/드래그...", bg="orange")
 
     def reset_goal_zones(self):
         self.manual_goal_rects = {'ai': None, 'player': None}
