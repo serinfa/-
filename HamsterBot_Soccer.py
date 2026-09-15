@@ -203,8 +203,10 @@ class HamsterSoccerApp:
         robot_frame.grid(row=0, column=1, sticky="ns", padx=10)
         mode_sub = tk.Frame(robot_frame, bg="white")
         mode_sub.pack(anchor="w", pady=(0, 6))
-        tk.Radiobutton(mode_sub, text=f"1번(ID{self.robot_marker_ids['r1']})만", variable=self.active_mode, value="r1", bg="white").pack(anchor="w")
-        tk.Radiobutton(mode_sub, text=f"2번(ID{self.robot_marker_ids['r2']})만", variable=self.active_mode, value="r2", bg="white").pack(anchor="w")
+        self.radio_r1 = tk.Radiobutton(mode_sub, text=f"1번(ID{self.robot_marker_ids['r1']})만", variable=self.active_mode, value="r1", bg="white")
+        self.radio_r1.pack(anchor="w")
+        self.radio_r2 = tk.Radiobutton(mode_sub, text=f"2번(ID{self.robot_marker_ids['r2']})만", variable=self.active_mode, value="r2", bg="white")
+        self.radio_r2.pack(anchor="w")
         tk.Radiobutton(mode_sub, text="두 대 모두", variable=self.active_mode, value="both", bg="white").pack(anchor="w")
         tk.Button(robot_frame, text="속도 조절", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.set_speed).pack(pady=3, fill="x")
@@ -258,10 +260,14 @@ class HamsterSoccerApp:
             ("r1", f"로봇 1 (ID{self.robot_marker_ids['r1']})"),
             ("r2", f"로봇 2 (ID{self.robot_marker_ids['r2']})"),
         )
+        self.status_id_labels = {}
         for key, label_text in status_texts:
             row = tk.Frame(status_frame, bg="white")
             row.pack(anchor="w", fill="x", pady=1)
-            tk.Label(row, text=label_text, bg="white", font=self.status_font, width=11, anchor="w").pack(side="left")
+            name_label = tk.Label(row, text=label_text, bg="white", font=self.status_font, width=11, anchor="w")
+            name_label.pack(side="left")
+            if key in ("r1", "r2"):
+                self.status_id_labels[key] = name_label
             dot = tk.Label(row, text="● 미확인", bg="white", fg="#e74c3c", font=self.status_font)
             dot.pack(side="left")
             self.status_labels[key] = dot
@@ -276,10 +282,22 @@ class HamsterSoccerApp:
         # 대조해서 마커-하드웨어 매핑이 꼬였는지 확인할 수 있다.
         buzz_row = tk.Frame(status_frame, bg="white")
         buzz_row.pack(pady=(3, 0), fill="x")
-        tk.Button(buzz_row, text=f"R1(ID{self.robot_marker_ids['r1']}) 부저", bg=self.button_color, fg=self.text_color,
-                  font=self.btn_font, width=8, relief="raised", bd=3, command=lambda: self.buzz_robot('r1')).pack(side="left", expand=True, fill="x", padx=1)
-        tk.Button(buzz_row, text=f"R2(ID{self.robot_marker_ids['r2']}) 부저", bg=self.button_color, fg=self.text_color,
-                  font=self.btn_font, width=8, relief="raised", bd=3, command=lambda: self.buzz_robot('r2')).pack(side="left", expand=True, fill="x", padx=1)
+        self.btn_buzz_r1 = tk.Button(buzz_row, text=f"R1(ID{self.robot_marker_ids['r1']}) 부저", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=lambda: self.buzz_robot('r1'))
+        self.btn_buzz_r1.pack(side="left", expand=True, fill="x", padx=1)
+        self.btn_buzz_r2 = tk.Button(buzz_row, text=f"R2(ID{self.robot_marker_ids['r2']}) 부저", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=lambda: self.buzz_robot('r2'))
+        self.btn_buzz_r2.pack(side="left", expand=True, fill="x", padx=1)
+
+        # 마커 ID-하드웨어 매핑은 BLE 연결 순서에 따라 세션마다 바뀔 수 있으므로,
+        # (1) 로봇을 잠깐 돌려서 어느 마커가 움직이는지로 자동 판별하는 방법과
+        # (2) 자동 판별이 애매할 때 즉시 수동으로 뒤집는 방법을 함께 제공한다.
+        mapping_row = tk.Frame(status_frame, bg="white")
+        mapping_row.pack(pady=(3, 0), fill="x")
+        tk.Button(mapping_row, text="자동 매칭", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=self.auto_detect_robot_mapping).pack(side="left", expand=True, fill="x", padx=1)
+        tk.Button(mapping_row, text="매핑 뒤집기", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=self.swap_robot_mapping).pack(side="left", expand=True, fill="x", padx=1)
 
         tk.Checkbutton(status_frame, text="디버그 정보 표시", variable=self.show_debug,
                         bg="white", font=self.status_font).pack(anchor="w", pady=(3, 0))
@@ -515,6 +533,114 @@ class HamsterSoccerApp:
         robot.buzzer(1000)
         wait(300)
         robot.buzzer(0)
+
+    def _refresh_marker_id_labels(self):
+        """robot_marker_ids가 바뀐 뒤 화면에 표시되는 ID 텍스트(라디오버튼,
+        상태 라벨, 부저 버튼)를 모두 새 값으로 갱신한다."""
+        self.radio_r1.config(text=f"1번(ID{self.robot_marker_ids['r1']})만")
+        self.radio_r2.config(text=f"2번(ID{self.robot_marker_ids['r2']})만")
+        self.status_id_labels['r1'].config(text=f"로봇 1 (ID{self.robot_marker_ids['r1']})")
+        self.status_id_labels['r2'].config(text=f"로봇 2 (ID{self.robot_marker_ids['r2']})")
+        self.btn_buzz_r1.config(text=f"R1(ID{self.robot_marker_ids['r1']}) 부저")
+        self.btn_buzz_r2.config(text=f"R2(ID{self.robot_marker_ids['r2']}) 부저")
+
+    def _on_marker_mapping_changed(self):
+        """마커-하드웨어 매핑이 바뀌면, 이전 매핑 기준으로 쌓인 각도 스무딩/회전
+        방향 상태는 더 이상 유효하지 않으므로 함께 초기화하고 화면 라벨을 갱신한다."""
+        self.robot_angle_ema = {'r1': None, 'r2': None}
+        self.last_turn_sign = {}
+        self._refresh_marker_id_labels()
+
+    def swap_robot_mapping(self):
+        """자동 매칭이 애매하거나 실패했을 때, 코드를 고치지 않고 즉시 R1/R2에
+        매핑된 마커 ID를 서로 뒤바꾼다."""
+        self.robot_marker_ids = {'r1': self.robot_marker_ids['r2'], 'r2': self.robot_marker_ids['r1']}
+        self._on_marker_mapping_changed()
+        messagebox.showinfo(
+            "매핑 뒤집기",
+            f"R1 = 마커 ID{self.robot_marker_ids['r1']}, R2 = 마커 ID{self.robot_marker_ids['r2']}로 뒤집었습니다."
+        )
+
+    def _detect_all_markers(self, frame):
+        """현재 프레임에 보이는 모든 아루코 마커의 중심 좌표를 {marker_id: (cx, cy)}
+        로 반환한다. update_frame의 인식 로직과 달리 화면에 아무것도 그리지 않고
+        좌표만 뽑는, 자동 매핑 판별 전용의 가벼운 버전이다. 같은 ID가 여러 개
+        잡히면(잡음 오탐) 면적이 가장 큰 후보만 사용한다."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if self.is_new_cv2:
+            corners, ids, _ = self.aruco_detector.detectMarkers(gray)
+        else:
+            corners, ids, _ = aruco.detectMarkers(gray, self.aruco_dict, parameters=self.aruco_params)
+        if ids is None:
+            return {}
+        best_by_id = {}
+        for i, marker_id in enumerate(ids.flatten()):
+            c = corners[i][0]
+            area = cv2.contourArea(c.astype(np.float32))
+            marker_id = int(marker_id)
+            if marker_id not in best_by_id or area > best_by_id[marker_id][0]:
+                cx = int(np.mean(c[:, 0]))
+                cy = int(np.mean(c[:, 1]))
+                best_by_id[marker_id] = (area, cx, cy)
+        return {mid: (cx, cy) for mid, (area, cx, cy) in best_by_id.items()}
+
+    def auto_detect_robot_mapping(self):
+        """h1을 잠깐 제자리 회전시킨 뒤, 카메라에서 실제로 위치가 많이 바뀐
+        마커 ID를 h1(R1)로, 나머지를 h2(R2)로 자동 매핑한다. BLE 연결 순서가
+        바뀌어 h1/h2가 어느 물리 로봇인지 달라져도 매번 다시 맞출 수 있다."""
+        if not (self.h1 and self.h2):
+            messagebox.showerror("자동 매칭", "두 로봇이 모두 연결되어 있지 않습니다.")
+            return
+        if not self.cap.isOpened():
+            messagebox.showerror("자동 매칭", "카메라가 연결되어 있지 않습니다.")
+            return
+
+        expected_ids = set(self.robot_marker_ids.values())
+
+        ret, frame = self.cap.read()
+        if not ret:
+            messagebox.showerror("자동 매칭", "카메라에서 영상을 받지 못했습니다.")
+            return
+        before = self._detect_all_markers(frame)
+        if not expected_ids.issubset(before.keys()):
+            missing = sorted(expected_ids - before.keys())
+            messagebox.showwarning("자동 매칭", f"마커 ID {missing}가 카메라에 보이지 않습니다.\n두 로봇이 모두 잘 보이는 곳에 놓고 다시 시도해 주세요.")
+            return
+
+        self.h1.wheels(35, -35)
+        wait(500)
+        self.h1.wheels(0, 0)
+        wait(250)
+
+        ret, frame = self.cap.read()
+        if not ret:
+            messagebox.showerror("자동 매칭", "카메라에서 영상을 받지 못했습니다.")
+            return
+        after = self._detect_all_markers(frame)
+        if not expected_ids.issubset(after.keys()):
+            missing = sorted(expected_ids - after.keys())
+            messagebox.showwarning("자동 매칭", f"회전 중 마커 ID {missing}를 놓쳤습니다. 다시 시도해 주세요.")
+            return
+
+        moved = {mid: math.hypot(after[mid][0] - before[mid][0], after[mid][1] - before[mid][1]) for mid in expected_ids}
+        ranked = sorted(expected_ids, key=lambda mid: moved[mid], reverse=True)
+        most_moved, least_moved = ranked[0], ranked[1]
+
+        # 움직임 차이가 뚜렷하지 않으면 잘못 판단할 위험이 크므로 자동 적용하지 않는다.
+        if moved[most_moved] < 8 or moved[most_moved] < moved[least_moved] * 1.5:
+            messagebox.showwarning(
+                "자동 매칭",
+                "두 마커의 움직임 차이가 뚜렷하지 않아 자동으로 판단하기 어렵습니다.\n"
+                "로봇 주변 공간을 넓게 비우고 다시 시도하거나, '매핑 뒤집기' 버튼으로 수동 전환해 주세요."
+            )
+            return
+
+        self.robot_marker_ids = {'r1': most_moved, 'r2': least_moved}
+        self._on_marker_mapping_changed()
+        messagebox.showinfo(
+            "자동 매칭 완료",
+            f"R1 = 마커 ID{most_moved} (h1), R2 = 마커 ID{least_moved} (h2)로 자동 설정되었습니다."
+        )
 
     def check_status(self):
         hw_status = "✅ 정상" if (self.h1 and self.h2) else "❌ 실패"
