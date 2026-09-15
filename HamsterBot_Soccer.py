@@ -526,6 +526,15 @@ class HamsterSoccerApp:
             self._draw_drive_debug(frame, label, rx, ry, error, "PUSH", speed_limit, speed_limit)
             return
 
+        # 공이 마커가 향한 방향 기준 좌우 30도 이내로 들어오면 조향 보정 없이
+        # 곧바로 직진한다. 방향 추정이 흔들려 TURN 모드가 같은 방향으로 계속
+        # 도는 상황(오차가 줄지 않는 상태)이어도, 공이 이 각도 안에 들어오는
+        # 순간 확실하게 회전을 멈추고 빠져나가게 하기 위한 탈출 조건.
+        if abs(error) <= 30:
+            robot.wheels(speed_limit, speed_limit)
+            self._draw_drive_debug(frame, label, rx, ry, error, "STRAIGHT", speed_limit, speed_limit)
+            return
+
         key = id(robot)
         # 정확히 뒤쪽(±180°)은 좌표 노이즈에 따라 부호가 쉽게 뒤집힌다.
         # 한 번 고른 회전 방향을 계속 유지한다.
