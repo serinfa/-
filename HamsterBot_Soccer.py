@@ -32,6 +32,10 @@ class HamsterSoccerApp:
         self.timer_id = None
 
         self.base_speed = 42
+        # 공이 마커가 향한 방향 기준 이 각도(±) 이내로 들어오면 조향 보정 없이
+        # 곧바로 직진한다 (move_robot_to_target의 STRAIGHT 조건). UI의
+        # "각도 조절" 버튼으로 실행 중에도 값을 바꿀 수 있다.
+        self.straight_angle_deg = 30
 
         # ===== 방향/바퀴 보정 =====
         # 화면의 빨간 화살표가 로봇의 실제 앞쪽을 향해야 합니다.
@@ -55,7 +59,10 @@ class HamsterSoccerApp:
 
         # 로봇에 실제로 부착된 아루코 마커 ID. 카메라 화면의 "Detected marker IDs"
         # 표시로 확인한 실제 값으로 맞춰야 함 (라벨을 다시 인쇄할 필요 없음).
-        self.robot_marker_ids = {'r1': 0, 'r2': 1}
+        # 부저 테스트(R1/R2 부저 버튼) 결과 h1(BLE 연결 순서상 첫 번째 로봇)에
+        # 실제로 붙은 마커는 ID1, h2에 붙은 마커는 ID0으로 확인되어 아래처럼
+        # 뒤바꿔 놓았다. 만약 다시 바뀌면 이 값을 서로 바꾸면 된다.
+        self.robot_marker_ids = {'r1': 1, 'r2': 0}
 
         self.active_mode = tk.StringVar(value="both")
         self.show_debug = tk.BooleanVar(value=False)
@@ -196,17 +203,21 @@ class HamsterSoccerApp:
         robot_frame.grid(row=0, column=1, sticky="ns", padx=10)
         mode_sub = tk.Frame(robot_frame, bg="white")
         mode_sub.pack(anchor="w", pady=(0, 6))
-        tk.Radiobutton(mode_sub, text=f"1번(ID{self.robot_marker_ids['r1']})만", variable=self.active_mode, value="r1", bg="white").pack(anchor="w")
-        tk.Radiobutton(mode_sub, text=f"2번(ID{self.robot_marker_ids['r2']})만", variable=self.active_mode, value="r2", bg="white").pack(anchor="w")
+        self.radio_r1 = tk.Radiobutton(mode_sub, text=f"1번(ID{self.robot_marker_ids['r1']})만", variable=self.active_mode, value="r1", bg="white")
+        self.radio_r1.pack(anchor="w")
+        self.radio_r2 = tk.Radiobutton(mode_sub, text=f"2번(ID{self.robot_marker_ids['r2']})만", variable=self.active_mode, value="r2", bg="white")
+        self.radio_r2.pack(anchor="w")
         tk.Radiobutton(mode_sub, text="두 대 모두", variable=self.active_mode, value="both", bg="white").pack(anchor="w")
         tk.Button(robot_frame, text="속도 조절", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.set_speed).pack(pady=3, fill="x")
+        tk.Button(robot_frame, text="각도 조절", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=16, relief="raised", bd=3, command=self.set_straight_angle).pack(pady=3, fill="x")
         self.btn_calibrate = tk.Button(robot_frame, text="공 색상 보정(영상 클릭)", bg=self.button_color, fg=self.text_color,
                                         font=self.btn_font, width=16, relief="raised", bd=3, command=self.start_calibration)
         self.btn_calibrate.pack(pady=3, fill="x")
 
         # 골대 위치: 영상에서 드래그로 직접 지정 (미지정 시 색상 자동 인식)
-        tk.Label(robot_frame, text="골대 지정(영상 드래그)", bg="white", font=self.status_font).pack(anchor="w", pady=(4, 0))
+        tk.Label(robot_frame, text="골대 지정(클릭=자동인식/드래그=직접지정)", bg="white", font=self.status_font).pack(anchor="w", pady=(4, 0))
         goal_btn_row = tk.Frame(robot_frame, bg="white")
         goal_btn_row.pack(pady=(3, 0), fill="x")
         self.btn_set_ai_goal = tk.Button(goal_btn_row, text="AI골대", bg=self.button_color, fg="white",
@@ -249,10 +260,14 @@ class HamsterSoccerApp:
             ("r1", f"로봇 1 (ID{self.robot_marker_ids['r1']})"),
             ("r2", f"로봇 2 (ID{self.robot_marker_ids['r2']})"),
         )
+        self.status_id_labels = {}
         for key, label_text in status_texts:
             row = tk.Frame(status_frame, bg="white")
             row.pack(anchor="w", fill="x", pady=1)
-            tk.Label(row, text=label_text, bg="white", font=self.status_font, width=11, anchor="w").pack(side="left")
+            name_label = tk.Label(row, text=label_text, bg="white", font=self.status_font, width=11, anchor="w")
+            name_label.pack(side="left")
+            if key in ("r1", "r2"):
+                self.status_id_labels[key] = name_label
             dot = tk.Label(row, text="● 미확인", bg="white", fg="#e74c3c", font=self.status_font)
             dot.pack(side="left")
             self.status_labels[key] = dot
@@ -260,6 +275,30 @@ class HamsterSoccerApp:
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.reconnect_camera).pack(pady=(8, 0), fill="x")
         tk.Button(status_frame, text="연결/하드웨어 점검", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.check_status).pack(pady=3, fill="x")
+
+        # 화면의 R1/R2 라벨(=마커 ID)이 실제로 어느 물리 로봇을 가리키는지 확인용.
+        # 버튼을 누르면 해당 라벨에 매핑된 Hamster 객체만 부저를 울리므로,
+        # "화면에 R1로 표시된 로봇"과 "실제 부저가 울리는 로봇"이 같은지 눈으로
+        # 대조해서 마커-하드웨어 매핑이 꼬였는지 확인할 수 있다.
+        buzz_row = tk.Frame(status_frame, bg="white")
+        buzz_row.pack(pady=(3, 0), fill="x")
+        self.btn_buzz_r1 = tk.Button(buzz_row, text=f"R1(ID{self.robot_marker_ids['r1']}) 부저", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=lambda: self.buzz_robot('r1'))
+        self.btn_buzz_r1.pack(side="left", expand=True, fill="x", padx=1)
+        self.btn_buzz_r2 = tk.Button(buzz_row, text=f"R2(ID{self.robot_marker_ids['r2']}) 부저", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=lambda: self.buzz_robot('r2'))
+        self.btn_buzz_r2.pack(side="left", expand=True, fill="x", padx=1)
+
+        # 마커 ID-하드웨어 매핑은 BLE 연결 순서에 따라 세션마다 바뀔 수 있으므로,
+        # (1) 로봇을 잠깐 돌려서 어느 마커가 움직이는지로 자동 판별하는 방법과
+        # (2) 자동 판별이 애매할 때 즉시 수동으로 뒤집는 방법을 함께 제공한다.
+        mapping_row = tk.Frame(status_frame, bg="white")
+        mapping_row.pack(pady=(3, 0), fill="x")
+        tk.Button(mapping_row, text="자동 매칭", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=self.auto_detect_robot_mapping).pack(side="left", expand=True, fill="x", padx=1)
+        tk.Button(mapping_row, text="매핑 뒤집기", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=self.swap_robot_mapping).pack(side="left", expand=True, fill="x", padx=1)
+
         tk.Checkbutton(status_frame, text="디버그 정보 표시", variable=self.show_debug,
                         bg="white", font=self.status_font).pack(anchor="w", pady=(3, 0))
 
@@ -302,6 +341,16 @@ class HamsterSoccerApp:
         if val:
             self.base_speed = val
             messagebox.showinfo("속도 조절", f"전진 속도가 {self.base_speed}으로 설정되었습니다.")
+
+    def set_straight_angle(self):
+        val = simpledialog.askinteger(
+            "각도 조절",
+            "공이 마커 방향 기준 몇 도 이내면 직진할지 입력하세요 (5~90):",
+            minvalue=5, maxvalue=90, initialvalue=self.straight_angle_deg
+        )
+        if val:
+            self.straight_angle_deg = val
+            messagebox.showinfo("각도 조절", f"직진 판정 각도가 ±{self.straight_angle_deg}도로 설정되었습니다.")
 
     def set_time(self):
         if self.is_playing: return
@@ -361,13 +410,26 @@ class HamsterSoccerApp:
         x, y = min(x0, fx), min(y0, fy)
         w, h = abs(fx - x0), abs(fy - y0)
         side = self.goal_pick_side
+        label = "AI" if side == 'ai' else "Player"
 
-        if w < 10 or h < 10:
-            messagebox.showwarning("골대 지정", "너무 작게 선택했습니다. 다시 드래그해 주세요.")
+        if w < 10 and h < 10:
+            # 드래그 없이 클릭만 한 경우: 클릭 지점의 색상과 연결된 영역을 찾아
+            # 그 영역의 경계 사각형을 골대 위치로 자동 지정한다.
+            rect = self._auto_detect_goal_rect(x0, y0)
+            if rect is None:
+                messagebox.showwarning(
+                    "골대 지정",
+                    "클릭한 위치에서 색상 영역을 찾지 못했습니다.\n골대 안쪽(바닥과 색이 다른 부분)을 클릭하거나, 드래그로 직접 범위를 지정해 주세요."
+                )
+            else:
+                self.manual_goal_rects[side] = rect
+                self.goal_armed[side] = True
+                messagebox.showinfo("골대 지정 완료", f"{label} 골대 위치가 클릭 지점 기준으로 자동 인식되었습니다.")
+        elif w < 10 or h < 10:
+            messagebox.showwarning("골대 지정", "너무 작게 선택했습니다. 다시 드래그하거나 한 번만 클릭해 주세요.")
         else:
             self.manual_goal_rects[side] = (x, y, w, h)
             self.goal_armed[side] = True
-            label = "AI" if side == 'ai' else "Player"
             messagebox.showinfo("골대 지정 완료", f"{label} 골대 위치가 저장되었습니다.")
 
         btn = self.btn_set_ai_goal if side == 'ai' else self.btn_set_player_goal
@@ -376,12 +438,45 @@ class HamsterSoccerApp:
         self.goal_drag_start = None
         self.goal_drag_current = None
 
+    def _auto_detect_goal_rect(self, fx, fy):
+        """클릭 지점 주변 색상을 기준으로 연결된 영역을 찾아 경계 사각형을 반환.
+        공 색상 보정(_calibrate_ball_at)과 같은 방식으로 클릭 지점의 HSV
+        평균/표준편차로 범위를 잡은 뒤, 그 범위의 마스크에서 클릭 지점을
+        포함하는 윤곽선 하나만 골라 boundingRect를 구한다."""
+        if self.current_hsv is None:
+            return None
+        orig_h, orig_w = self.orig_frame_shape
+        if orig_h == 0 or orig_w == 0:
+            return None
+        fx = max(5, min(orig_w - 6, fx))
+        fy = max(5, min(orig_h - 6, fy))
+
+        patch = self.current_hsv[fy - 5:fy + 5, fx - 5:fx + 5].reshape(-1, 3)
+        h_mean, s_mean, v_mean = patch.mean(axis=0)
+        h_std, s_std, v_std = patch.std(axis=0)
+
+        h_margin = max(10, h_std * 2.5)
+        s_margin = max(50, s_std * 2.5)
+        v_margin = max(50, v_std * 2.5)
+
+        lower = np.array([max(0, h_mean - h_margin), max(0, s_mean - s_margin), max(0, v_mean - v_margin)])
+        upper = np.array([min(179, h_mean + h_margin), 255, 255])
+        mask = cv2.inRange(self.current_hsv, lower, upper)
+        kernel = np.ones((7, 7), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            if cv2.pointPolygonTest(c, (float(fx), float(fy)), False) >= 0 and cv2.contourArea(c) >= self.min_goal_area:
+                return cv2.boundingRect(c)
+        return None
+
     def start_goal_pick(self, side):
         self.goal_pick_side = side
         self.goal_drag_start = None
         self.goal_drag_current = None
         btn = self.btn_set_ai_goal if side == 'ai' else self.btn_set_player_goal
-        btn.config(text="드래그...", bg="orange")
+        btn.config(text="클릭/드래그...", bg="orange")
 
     def reset_goal_zones(self):
         self.manual_goal_rects = {'ai': None, 'player': None}
@@ -423,6 +518,128 @@ class HamsterSoccerApp:
         messagebox.showinfo(
             "색상 보정 완료",
             f"새 HSV 범위로 갱신되었습니다.\nLower {self.ball_lower.astype(int)}\nUpper {self.ball_upper.astype(int)}"
+        )
+
+    def buzz_robot(self, key):
+        """화면에 R1/R2로 표시되는 라벨이 실제로 어느 물리 로봇인지 확인용으로,
+        그 라벨에 매핑된 Hamster 객체만 부저를 울린다. 부저가 울리는 로봇이
+        화면에서 기대한 로봇(R1이면 ID{robot_marker_ids['r1']} 마커가 붙은 로봇)과
+        다르면 마커 ID와 h1/h2 연결 순서가 어긋난 것이다."""
+        robot = self.h1 if key == 'r1' else self.h2
+        marker_id = self.robot_marker_ids[key]
+        if not robot:
+            messagebox.showerror("부저 테스트", f"{key.upper()}(ID{marker_id}) 로봇이 연결되어 있지 않습니다.")
+            return
+        robot.buzzer(1000)
+        wait(300)
+        robot.buzzer(0)
+
+    def _refresh_marker_id_labels(self):
+        """robot_marker_ids가 바뀐 뒤 화면에 표시되는 ID 텍스트(라디오버튼,
+        상태 라벨, 부저 버튼)를 모두 새 값으로 갱신한다."""
+        self.radio_r1.config(text=f"1번(ID{self.robot_marker_ids['r1']})만")
+        self.radio_r2.config(text=f"2번(ID{self.robot_marker_ids['r2']})만")
+        self.status_id_labels['r1'].config(text=f"로봇 1 (ID{self.robot_marker_ids['r1']})")
+        self.status_id_labels['r2'].config(text=f"로봇 2 (ID{self.robot_marker_ids['r2']})")
+        self.btn_buzz_r1.config(text=f"R1(ID{self.robot_marker_ids['r1']}) 부저")
+        self.btn_buzz_r2.config(text=f"R2(ID{self.robot_marker_ids['r2']}) 부저")
+
+    def _on_marker_mapping_changed(self):
+        """마커-하드웨어 매핑이 바뀌면, 이전 매핑 기준으로 쌓인 각도 스무딩/회전
+        방향 상태는 더 이상 유효하지 않으므로 함께 초기화하고 화면 라벨을 갱신한다."""
+        self.robot_angle_ema = {'r1': None, 'r2': None}
+        self.last_turn_sign = {}
+        self._refresh_marker_id_labels()
+
+    def swap_robot_mapping(self):
+        """자동 매칭이 애매하거나 실패했을 때, 코드를 고치지 않고 즉시 R1/R2에
+        매핑된 마커 ID를 서로 뒤바꾼다."""
+        self.robot_marker_ids = {'r1': self.robot_marker_ids['r2'], 'r2': self.robot_marker_ids['r1']}
+        self._on_marker_mapping_changed()
+        messagebox.showinfo(
+            "매핑 뒤집기",
+            f"R1 = 마커 ID{self.robot_marker_ids['r1']}, R2 = 마커 ID{self.robot_marker_ids['r2']}로 뒤집었습니다."
+        )
+
+    def _detect_all_markers(self, frame):
+        """현재 프레임에 보이는 모든 아루코 마커의 중심 좌표를 {marker_id: (cx, cy)}
+        로 반환한다. update_frame의 인식 로직과 달리 화면에 아무것도 그리지 않고
+        좌표만 뽑는, 자동 매핑 판별 전용의 가벼운 버전이다. 같은 ID가 여러 개
+        잡히면(잡음 오탐) 면적이 가장 큰 후보만 사용한다."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if self.is_new_cv2:
+            corners, ids, _ = self.aruco_detector.detectMarkers(gray)
+        else:
+            corners, ids, _ = aruco.detectMarkers(gray, self.aruco_dict, parameters=self.aruco_params)
+        if ids is None:
+            return {}
+        best_by_id = {}
+        for i, marker_id in enumerate(ids.flatten()):
+            c = corners[i][0]
+            area = cv2.contourArea(c.astype(np.float32))
+            marker_id = int(marker_id)
+            if marker_id not in best_by_id or area > best_by_id[marker_id][0]:
+                cx = int(np.mean(c[:, 0]))
+                cy = int(np.mean(c[:, 1]))
+                best_by_id[marker_id] = (area, cx, cy)
+        return {mid: (cx, cy) for mid, (area, cx, cy) in best_by_id.items()}
+
+    def auto_detect_robot_mapping(self):
+        """h1을 잠깐 제자리 회전시킨 뒤, 카메라에서 실제로 위치가 많이 바뀐
+        마커 ID를 h1(R1)로, 나머지를 h2(R2)로 자동 매핑한다. BLE 연결 순서가
+        바뀌어 h1/h2가 어느 물리 로봇인지 달라져도 매번 다시 맞출 수 있다."""
+        if not (self.h1 and self.h2):
+            messagebox.showerror("자동 매칭", "두 로봇이 모두 연결되어 있지 않습니다.")
+            return
+        if not self.cap.isOpened():
+            messagebox.showerror("자동 매칭", "카메라가 연결되어 있지 않습니다.")
+            return
+
+        expected_ids = set(self.robot_marker_ids.values())
+
+        ret, frame = self.cap.read()
+        if not ret:
+            messagebox.showerror("자동 매칭", "카메라에서 영상을 받지 못했습니다.")
+            return
+        before = self._detect_all_markers(frame)
+        if not expected_ids.issubset(before.keys()):
+            missing = sorted(expected_ids - before.keys())
+            messagebox.showwarning("자동 매칭", f"마커 ID {missing}가 카메라에 보이지 않습니다.\n두 로봇이 모두 잘 보이는 곳에 놓고 다시 시도해 주세요.")
+            return
+
+        self.h1.wheels(35, -35)
+        wait(500)
+        self.h1.wheels(0, 0)
+        wait(250)
+
+        ret, frame = self.cap.read()
+        if not ret:
+            messagebox.showerror("자동 매칭", "카메라에서 영상을 받지 못했습니다.")
+            return
+        after = self._detect_all_markers(frame)
+        if not expected_ids.issubset(after.keys()):
+            missing = sorted(expected_ids - after.keys())
+            messagebox.showwarning("자동 매칭", f"회전 중 마커 ID {missing}를 놓쳤습니다. 다시 시도해 주세요.")
+            return
+
+        moved = {mid: math.hypot(after[mid][0] - before[mid][0], after[mid][1] - before[mid][1]) for mid in expected_ids}
+        ranked = sorted(expected_ids, key=lambda mid: moved[mid], reverse=True)
+        most_moved, least_moved = ranked[0], ranked[1]
+
+        # 움직임 차이가 뚜렷하지 않으면 잘못 판단할 위험이 크므로 자동 적용하지 않는다.
+        if moved[most_moved] < 8 or moved[most_moved] < moved[least_moved] * 1.5:
+            messagebox.showwarning(
+                "자동 매칭",
+                "두 마커의 움직임 차이가 뚜렷하지 않아 자동으로 판단하기 어렵습니다.\n"
+                "로봇 주변 공간을 넓게 비우고 다시 시도하거나, '매핑 뒤집기' 버튼으로 수동 전환해 주세요."
+            )
+            return
+
+        self.robot_marker_ids = {'r1': most_moved, 'r2': least_moved}
+        self._on_marker_mapping_changed()
+        messagebox.showinfo(
+            "자동 매칭 완료",
+            f"R1 = 마커 ID{most_moved} (h1), R2 = 마커 ID{least_moved} (h2)로 자동 설정되었습니다."
         )
 
     def check_status(self):
@@ -524,6 +741,15 @@ class HamsterSoccerApp:
         if distance < contact_dist and abs(error) < 40:
             robot.wheels(speed_limit, speed_limit)
             self._draw_drive_debug(frame, label, rx, ry, error, "PUSH", speed_limit, speed_limit)
+            return
+
+        # 공이 마커가 향한 방향 기준 좌우 30도 이내로 들어오면 조향 보정 없이
+        # 곧바로 직진한다. 방향 추정이 흔들려 TURN 모드가 같은 방향으로 계속
+        # 도는 상황(오차가 줄지 않는 상태)이어도, 공이 이 각도 안에 들어오는
+        # 순간 확실하게 회전을 멈추고 빠져나가게 하기 위한 탈출 조건.
+        if abs(error) <= self.straight_angle_deg:
+            robot.wheels(speed_limit, speed_limit)
+            self._draw_drive_debug(frame, label, rx, ry, error, "STRAIGHT", speed_limit, speed_limit)
             return
 
         key = id(robot)
