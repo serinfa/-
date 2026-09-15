@@ -32,6 +32,10 @@ class HamsterSoccerApp:
         self.timer_id = None
 
         self.base_speed = 42
+        # 공이 마커가 향한 방향 기준 이 각도(±) 이내로 들어오면 조향 보정 없이
+        # 곧바로 직진한다 (move_robot_to_target의 STRAIGHT 조건). UI의
+        # "각도 조절" 버튼으로 실행 중에도 값을 바꿀 수 있다.
+        self.straight_angle_deg = 30
 
         # ===== 방향/바퀴 보정 =====
         # 화면의 빨간 화살표가 로봇의 실제 앞쪽을 향해야 합니다.
@@ -201,6 +205,8 @@ class HamsterSoccerApp:
         tk.Radiobutton(mode_sub, text="두 대 모두", variable=self.active_mode, value="both", bg="white").pack(anchor="w")
         tk.Button(robot_frame, text="속도 조절", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.set_speed).pack(pady=3, fill="x")
+        tk.Button(robot_frame, text="각도 조절", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=16, relief="raised", bd=3, command=self.set_straight_angle).pack(pady=3, fill="x")
         self.btn_calibrate = tk.Button(robot_frame, text="공 색상 보정(영상 클릭)", bg=self.button_color, fg=self.text_color,
                                         font=self.btn_font, width=16, relief="raised", bd=3, command=self.start_calibration)
         self.btn_calibrate.pack(pady=3, fill="x")
@@ -302,6 +308,16 @@ class HamsterSoccerApp:
         if val:
             self.base_speed = val
             messagebox.showinfo("속도 조절", f"전진 속도가 {self.base_speed}으로 설정되었습니다.")
+
+    def set_straight_angle(self):
+        val = simpledialog.askinteger(
+            "각도 조절",
+            "공이 마커 방향 기준 몇 도 이내면 직진할지 입력하세요 (5~90):",
+            minvalue=5, maxvalue=90, initialvalue=self.straight_angle_deg
+        )
+        if val:
+            self.straight_angle_deg = val
+            messagebox.showinfo("각도 조절", f"직진 판정 각도가 ±{self.straight_angle_deg}도로 설정되었습니다.")
 
     def set_time(self):
         if self.is_playing: return
@@ -530,7 +546,7 @@ class HamsterSoccerApp:
         # 곧바로 직진한다. 방향 추정이 흔들려 TURN 모드가 같은 방향으로 계속
         # 도는 상황(오차가 줄지 않는 상태)이어도, 공이 이 각도 안에 들어오는
         # 순간 확실하게 회전을 멈추고 빠져나가게 하기 위한 탈출 조건.
-        if abs(error) <= 30:
+        if abs(error) <= self.straight_angle_deg:
             robot.wheels(speed_limit, speed_limit)
             self._draw_drive_debug(frame, label, rx, ry, error, "STRAIGHT", speed_limit, speed_limit)
             return
