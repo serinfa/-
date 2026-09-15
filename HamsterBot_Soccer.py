@@ -59,7 +59,10 @@ class HamsterSoccerApp:
 
         # 로봇에 실제로 부착된 아루코 마커 ID. 카메라 화면의 "Detected marker IDs"
         # 표시로 확인한 실제 값으로 맞춰야 함 (라벨을 다시 인쇄할 필요 없음).
-        self.robot_marker_ids = {'r1': 0, 'r2': 1}
+        # 부저 테스트(R1/R2 부저 버튼) 결과 h1(BLE 연결 순서상 첫 번째 로봇)에
+        # 실제로 붙은 마커는 ID1, h2에 붙은 마커는 ID0으로 확인되어 아래처럼
+        # 뒤바꿔 놓았다. 만약 다시 바뀌면 이 값을 서로 바꾸면 된다.
+        self.robot_marker_ids = {'r1': 1, 'r2': 0}
 
         self.active_mode = tk.StringVar(value="both")
         self.show_debug = tk.BooleanVar(value=False)
