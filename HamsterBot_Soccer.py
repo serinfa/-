@@ -266,6 +266,18 @@ class HamsterSoccerApp:
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.reconnect_camera).pack(pady=(8, 0), fill="x")
         tk.Button(status_frame, text="연결/하드웨어 점검", bg=self.button_color, fg=self.text_color,
                   font=self.btn_font, width=16, relief="raised", bd=3, command=self.check_status).pack(pady=3, fill="x")
+
+        # 화면의 R1/R2 라벨(=마커 ID)이 실제로 어느 물리 로봇을 가리키는지 확인용.
+        # 버튼을 누르면 해당 라벨에 매핑된 Hamster 객체만 부저를 울리므로,
+        # "화면에 R1로 표시된 로봇"과 "실제 부저가 울리는 로봇"이 같은지 눈으로
+        # 대조해서 마커-하드웨어 매핑이 꼬였는지 확인할 수 있다.
+        buzz_row = tk.Frame(status_frame, bg="white")
+        buzz_row.pack(pady=(3, 0), fill="x")
+        tk.Button(buzz_row, text=f"R1(ID{self.robot_marker_ids['r1']}) 부저", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=lambda: self.buzz_robot('r1')).pack(side="left", expand=True, fill="x", padx=1)
+        tk.Button(buzz_row, text=f"R2(ID{self.robot_marker_ids['r2']}) 부저", bg=self.button_color, fg=self.text_color,
+                  font=self.btn_font, width=8, relief="raised", bd=3, command=lambda: self.buzz_robot('r2')).pack(side="left", expand=True, fill="x", padx=1)
+
         tk.Checkbutton(status_frame, text="디버그 정보 표시", variable=self.show_debug,
                         bg="white", font=self.status_font).pack(anchor="w", pady=(3, 0))
 
@@ -440,6 +452,20 @@ class HamsterSoccerApp:
             "색상 보정 완료",
             f"새 HSV 범위로 갱신되었습니다.\nLower {self.ball_lower.astype(int)}\nUpper {self.ball_upper.astype(int)}"
         )
+
+    def buzz_robot(self, key):
+        """화면에 R1/R2로 표시되는 라벨이 실제로 어느 물리 로봇인지 확인용으로,
+        그 라벨에 매핑된 Hamster 객체만 부저를 울린다. 부저가 울리는 로봇이
+        화면에서 기대한 로봇(R1이면 ID{robot_marker_ids['r1']} 마커가 붙은 로봇)과
+        다르면 마커 ID와 h1/h2 연결 순서가 어긋난 것이다."""
+        robot = self.h1 if key == 'r1' else self.h2
+        marker_id = self.robot_marker_ids[key]
+        if not robot:
+            messagebox.showerror("부저 테스트", f"{key.upper()}(ID{marker_id}) 로봇이 연결되어 있지 않습니다.")
+            return
+        robot.buzzer(1000)
+        wait(300)
+        robot.buzzer(0)
 
     def check_status(self):
         hw_status = "✅ 정상" if (self.h1 and self.h2) else "❌ 실패"
