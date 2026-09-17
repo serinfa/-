@@ -2,7 +2,7 @@
 전시회 부스용 사탕뽑기로봇 제어 프로그램 (Candy Crane Controller)
 
 - 좌측: 웹캠 영상 + 화면 위 가상 버튼(Air Touch)
-- 우측: 아두이노 연결, 상태 표시, 조작 안내, 긴급 정지
+- 우측: 아두이노 연결, 상태 표시, 조작 안내
 
 조작 방법
   화면의 가상 버튼에 검지 손가락을 올리면 로봇이 이동합니다.
@@ -47,7 +47,7 @@ SERIAL_TIMEOUT = 0.1
 SERIAL_BOOT_DELAY_SEC = 2.0  # 아두이노 재부팅 대기 시간
 
 MOVE_COOLDOWN_SEC = 0.08  # 이동 명령 과부하 방지 쿨다운
-NO_COOLDOWN_COMMANDS = {"STOP", "HOME"}  # 쿨다운 없이 즉시 전송할 명령
+NO_COOLDOWN_COMMANDS = {"HOME"}  # 쿨다운 없이 즉시 전송할 명령
 
 GRIPPER_OPEN_ANGLE_DEFAULT = 180
 GRIPPER_CLOSE_ANGLE_DEFAULT = 90
@@ -82,7 +82,6 @@ class CandyRobotApp:
         # 하드웨어 통신 상태
         self.serial_port = None
         self.arduino_status_var = tk.StringVar(value="연결 안 됨")
-        self.is_emergency_stop = False
         self._last_move_time = 0.0
 
         # 카메라/영상 처리 상태
@@ -126,7 +125,6 @@ class CandyRobotApp:
 
         self._build_connection_section(control_frame)
         self._build_guide_section(control_frame)
-        self._build_stop_section(control_frame)
 
     def _build_connection_section(self, parent):
         tk.Label(parent, text="[ 아두이노 연결 ]", font=("Arial", 14, "bold")).pack(pady=5)
@@ -151,12 +149,6 @@ class CandyRobotApp:
         tk.Label(parent, text="Q/E : Z축 상승/하강").pack()
         tk.Label(parent, text="SPACE : 집게 열기/닫기 토글").pack()
         tk.Label(parent, text="H : 원점 복귀 (HOME)").pack()
-
-    def _build_stop_section(self, parent):
-        tk.Button(
-            parent, text="긴급 정지 (STOP)", bg="red", fg="white", font=("Arial", 14, "bold"),
-            command=self.emergency_stop,
-        ).pack(pady=20, fill=tk.X)
 
     # ------------------------------------------------------------------
     # 아두이노 시리얼 통신
@@ -199,9 +191,6 @@ class CandyRobotApp:
         self.serial_port = None
 
     def execute_hardware_cmd(self, command_str):
-        if self.is_emergency_stop:
-            return
-
         now = time.time()
         if command_str not in NO_COOLDOWN_COMMANDS and not command_str.startswith("G:"):
             if now - self._last_move_time < MOVE_COOLDOWN_SEC:
@@ -218,16 +207,6 @@ class CandyRobotApp:
         except serial.SerialException as e:
             self.arduino_status_var.set("통신 오류")
             print(f"Serial Error: {e}")
-
-    def emergency_stop(self):
-        self.is_emergency_stop = True
-        self.arduino_status_var.set("긴급 정지됨")
-        if self.serial_port and self.serial_port.is_open:
-            try:
-                self.serial_port.write(b"STOP\n")
-            except serial.SerialException:
-                pass
-        messagebox.showwarning("긴급 정지", "모든 하드웨어 동작을 중지합니다.")
 
     # ------------------------------------------------------------------
     # 키보드 조작
@@ -335,7 +314,6 @@ class CandyRobotApp:
     # ------------------------------------------------------------------
     def on_closing(self):
         self.is_running = False
-        self.is_emergency_stop = True
         self.video_thread.join(timeout=1.0)
 
         self.disconnect_arduino()
