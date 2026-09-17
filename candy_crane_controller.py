@@ -77,14 +77,11 @@ class CandyRobotApp:
             pass
 
         # 집게 각도 설정
-        self.gripper_open_angle = tk.IntVar(value=GRIPPER_OPEN_ANGLE_DEFAULT)
-        self.gripper_close_angle = tk.IntVar(value=GRIPPER_CLOSE_ANGLE_DEFAULT)
         self.is_gripper_closed = False
 
         # 하드웨어 통신 상태
         self.serial_port = None
         self.arduino_status_var = tk.StringVar(value="연결 안 됨")
-        self.last_command_var = tk.StringVar(value="-")
         self.is_emergency_stop = False
         self._last_move_time = 0.0
 
@@ -129,7 +126,6 @@ class CandyRobotApp:
 
         self._build_connection_section(control_frame)
         self._build_guide_section(control_frame)
-        self._build_gripper_section(control_frame)
         self._build_stop_section(control_frame)
 
     def _build_connection_section(self, parent):
@@ -145,8 +141,6 @@ class CandyRobotApp:
         ).pack(pady=5)
 
         tk.Label(parent, textvariable=self.arduino_status_var, fg="blue").pack(pady=5)
-        tk.Label(parent, text="마지막 명령:").pack(pady=(10, 0))
-        tk.Label(parent, textvariable=self.last_command_var, fg="gray20").pack()
 
     def _build_guide_section(self, parent):
         tk.Label(parent, text="[ 로봇 제어 안내 ]", font=("Arial", 14, "bold")).pack(pady=15)
@@ -158,30 +152,11 @@ class CandyRobotApp:
         tk.Label(parent, text="SPACE : 집게 열기/닫기 토글").pack()
         tk.Label(parent, text="H : 원점 복귀 (HOME)").pack()
 
-    def _build_gripper_section(self, parent):
-        frame = tk.LabelFrame(parent, text="집게(Gripper) 각도 설정")
-        frame.pack(pady=15, fill=tk.X)
-
-        tk.Label(frame, text="열림 각도(°)").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        tk.Spinbox(frame, from_=0, to=180, textvariable=self.gripper_open_angle, width=6).grid(
-            row=0, column=1, padx=5, pady=5
-        )
-
-        tk.Label(frame, text="닫힘 각도(°)").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        tk.Spinbox(frame, from_=0, to=180, textvariable=self.gripper_close_angle, width=6).grid(
-            row=1, column=1, padx=5, pady=5
-        )
-
     def _build_stop_section(self, parent):
         tk.Button(
             parent, text="긴급 정지 (STOP)", bg="red", fg="white", font=("Arial", 14, "bold"),
             command=self.emergency_stop,
-        ).pack(pady=10, fill=tk.X)
-
-        tk.Button(
-            parent, text="정지 해제 (RESUME)", bg="gray30", fg="white", font=("Arial", 11),
-            command=self.resume_from_emergency_stop,
-        ).pack(pady=5, fill=tk.X)
+        ).pack(pady=20, fill=tk.X)
 
     # ------------------------------------------------------------------
     # 아두이노 시리얼 통신
@@ -208,6 +183,7 @@ class CandyRobotApp:
             )
             time.sleep(SERIAL_BOOT_DELAY_SEC)
             self.arduino_status_var.set(f"연결됨: {port}")
+            self.execute_hardware_cmd("HOME")  # 연결 직후 원점으로 자동 복귀
             messagebox.showinfo("연결 성공", f"아두이노가 {port}에 연결되었습니다.")
         except serial.SerialException as e:
             self.serial_port = None
@@ -237,7 +213,6 @@ class CandyRobotApp:
 
         try:
             self.serial_port.write(f"{command_str}\n".encode("utf-8"))
-            self.last_command_var.set(command_str)
         except serial.SerialTimeoutException:
             pass  # 시리얼 버퍼가 꽉 찬 경우, 다음 명령에서 재시도
         except serial.SerialException as e:
@@ -254,13 +229,6 @@ class CandyRobotApp:
                 pass
         messagebox.showwarning("긴급 정지", "모든 하드웨어 동작을 중지합니다.")
 
-    def resume_from_emergency_stop(self):
-        if not self.is_emergency_stop:
-            return
-        self.is_emergency_stop = False
-        status = f"연결됨: {self.port_combobox.get()}" if self.serial_port and self.serial_port.is_open else "연결 안 됨"
-        self.arduino_status_var.set(status)
-
     # ------------------------------------------------------------------
     # 키보드 조작
     # ------------------------------------------------------------------
@@ -275,7 +243,7 @@ class CandyRobotApp:
             self.execute_hardware_cmd(KEY_TO_COMMAND[key])
 
     def toggle_gripper(self):
-        target_angle = self.gripper_open_angle.get() if self.is_gripper_closed else self.gripper_close_angle.get()
+        target_angle = GRIPPER_OPEN_ANGLE_DEFAULT if self.is_gripper_closed else GRIPPER_CLOSE_ANGLE_DEFAULT
         self.execute_hardware_cmd(f"G:{target_angle}")
         self.is_gripper_closed = not self.is_gripper_closed
 
@@ -316,17 +284,19 @@ class CandyRobotApp:
                 continue
 
             frame = cv2.flip(frame, 1)  # 거울 모드
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, _ = frame.shape
             boxes = self._virtual_button_boxes(w, h)
+
+            # 인식용 사본은 버튼/골격이 그려지기 전, 축소된 상태로 먼저 만든다.
+            # 작은 이미지에서 색변환을 하므로 풀해상도 변환을 한 번 아낄 수 있다.
+            small_bgr = cv2.resize(frame, (HAND_DETECTION_WIDTH, HAND_DETECTION_HEIGHT))
+            detection_frame = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2RGB)
+            hand_results = self.hands.process(detection_frame)
 
             for cmd, (x1, y1, x2, y2) in boxes.items():
                 cv2.rectangle(frame, (x1, y1), (x2, y2), BUTTON_COLOR_IDLE, 2)
                 cv2.putText(frame, cmd, (x1 + 15, y1 + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, BUTTON_COLOR_IDLE, 2)
 
-            # 화면 표시용 프레임은 원본 해상도 그대로 두고, 인식용으로만 축소된 사본을 사용한다.
-            detection_frame = cv2.resize(rgb_frame, (HAND_DETECTION_WIDTH, HAND_DETECTION_HEIGHT))
-            hand_results = self.hands.process(detection_frame)
             if hand_results.multi_hand_landmarks:
                 for hand_landmarks in hand_results.multi_hand_landmarks:
                     self.mp_draw.draw_landmarks(frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
