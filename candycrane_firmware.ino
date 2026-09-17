@@ -1,188 +1,182 @@
 #include <Servo.h>
 
-// [수정 금지] CNC Shield V3 하드웨어 핀 배열
-const int stepX = 2; const int dirX = 5;
-const int stepY = 3; const int dirY = 6;
-const int stepZ = 4; const int dirZ = 7;
-const int enPin = 8;
+Servo gripper;
 
-// [수정 금지] 4방향 리미트 스위치 핀
-const int limitX_Home = 9;   // X- 방향 리미트
-const int limitY_Home = 10;  // Y- 방향 리미트
-const int limitX_Max  = A0;  // X+ 방향 리미트
-const int limitY_Max  = A1;  // Y+ 방향 리미트
+// =====================================================================
+// 1. CNC Shield V3 핀 번호 설정
+// =====================================================================
+const int X_STEP = 2; const int X_DIR = 5;
+const int Y_STEP = 3; const int Y_DIR = 6;
+const int Z_STEP = 4; const int Z_DIR = 7;
+const int ENABLE_PIN = 8;
 
-Servo gripperServo;
-const int servoPin = 11;
+// 4방향 독립 스위치 맵핑
+const int X_RIGHT_LIMIT = 9;
+const int X_LEFT_LIMIT = A0;
+const int Y_FWD_LIMIT = 10;
+const int Y_BWD_LIMIT = A1;
 
-String inputString = "";
-const int moveSteps = 80;
-
-#define SWITCH_PRESSED LOW
-#define SWITCH_RELEASED HIGH
+const int SERVO_PIN = 11;
 
 void setup() {
   Serial.begin(115200);
 
-  pinMode(stepX, OUTPUT); pinMode(dirX, OUTPUT);
-  pinMode(stepY, OUTPUT); pinMode(dirY, OUTPUT);
-  pinMode(stepZ, OUTPUT); pinMode(dirZ, OUTPUT);
-  pinMode(enPin, OUTPUT);
+  pinMode(X_STEP, OUTPUT); pinMode(X_DIR, OUTPUT);
+  pinMode(Y_STEP, OUTPUT); pinMode(Y_DIR, OUTPUT);
+  pinMode(Z_STEP, OUTPUT); pinMode(Z_DIR, OUTPUT);
+  pinMode(ENABLE_PIN, OUTPUT);
 
-  // 리미트 스위치 4개 모두 내부 풀업 설정
-  pinMode(limitX_Home, INPUT_PULLUP);
-  pinMode(limitY_Home, INPUT_PULLUP);
-  pinMode(limitX_Max,  INPUT_PULLUP);
-  pinMode(limitY_Max,  INPUT_PULLUP);
+  pinMode(X_RIGHT_LIMIT, INPUT_PULLUP);
+  pinMode(X_LEFT_LIMIT, INPUT_PULLUP);
+  pinMode(Y_FWD_LIMIT, INPUT_PULLUP);
+  pinMode(Y_BWD_LIMIT, INPUT_PULLUP);
 
-  digitalWrite(enPin, LOW); // 모터 드라이버 활성화
+  digitalWrite(ENABLE_PIN, LOW);
 
-  gripperServo.attach(servoPin);
-  gripperServo.write(180);  // 초기에 집게 열기
-
-  inputString.reserve(200);
-  Serial.println("Arduino Candy Crane Ready!");
+  gripper.attach(SERVO_PIN);
+  gripper.write(180);
 }
 
 void loop() {
-  while (Serial.available()) {
-    char inChar = (char)Serial.read();
-    if (inChar == '\n') {
-      inputString.trim();
-      if (inputString.length() > 0) {
-        processCommand(inputString);
-        inputString = "";
-      }
-    } else {
-      inputString += inChar;
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    if (input.length() > 0) {
+      executeCommand(input);
     }
   }
 }
 
-// 명령어 처리 함수
-void processCommand(String cmd) {
-  // 1. X+ 이동 (기존 HIGH, HIGH에서 LOW, LOW로 반전)
-  if (cmd == "X+") {
-    stepDualMotorSafe(LOW, LOW, moveSteps, limitX_Max);
-  } 
-  // 2. X- 이동 (기존 LOW, LOW에서 HIGH, HIGH로 반전)
-  else if (cmd == "X-") {
-    stepDualMotorSafe(HIGH, HIGH, moveSteps, limitX_Home);
-  } 
-  // 3. Y+ 이동 (X: 반시계방향 LOW, Y: 시계방향 HIGH)
-  else if (cmd == "Y+") {
-    stepDualMotorSafe(LOW, HIGH, moveSteps, limitY_Max);
-  } 
-  // 4. Y- 이동 (X: 시계방향 HIGH, Y: 반시계방향 LOW)
-  else if (cmd == "Y-") {
-    stepDualMotorSafe(HIGH, LOW, moveSteps, limitY_Home);
+// =====================================================================
+// 2. 명령어 해독 (속도와 튕김 거리 분리)
+// =====================================================================
+void executeCommand(String cmd) {
+  if (cmd == "STOP" || cmd == "STOP_XY") {
+    return;
   }
-  
-  // Z축 이동
-  else if (cmd == "Z+") stepMotorZ(dirZ, stepZ, HIGH, moveSteps * 2);
-  else if (cmd == "Z-") stepMotorZ(dirZ, stepZ, LOW, moveSteps * 2);
-  
-  // 서보 모터(집게) 제어
-  else if (cmd.startsWith("G:")) {
-    int angle = cmd.substring(2).toInt();
-    angle = constrain(angle, 0, 180);
-    delay(200); 
-    gripperServo.write(angle);
-    delay(300); 
+
+  int firstUnder = cmd.indexOf('_');
+  int secondUnder = cmd.indexOf('_', firstUnder + 1);
+
+  String action = cmd;
+  int spd = 1200;
+  int bounce = 15;
+
+  if (firstUnder > 0 && secondUnder > 0) {
+    action = cmd.substring(0, firstUnder);
+    spd = cmd.substring(firstUnder + 1, secondUnder).toInt();
+    bounce = cmd.substring(secondUnder + 1).toInt();
+  } else if (firstUnder > 0) {
+    action = cmd.substring(0, firstUnder);
+    spd = cmd.substring(firstUnder + 1).toInt();
   }
-  
-  // 4방향 리미트 스위치를 활용한 원점 복귀
-  else if (cmd == "HOME") {
-    executeHoming();
+
+  if (action == "X-")      moveCoreXY(LOW, LOW, 200, spd, X_LEFT_LIMIT, bounce);
+  else if (action == "X+") moveCoreXY(HIGH, HIGH, 200, spd, X_RIGHT_LIMIT, bounce);
+  else if (action == "Y-") moveCoreXY(LOW, HIGH, 200, spd, Y_BWD_LIMIT, bounce);
+  else if (action == "Y+") moveCoreXY(HIGH, LOW, 200, spd, Y_FWD_LIMIT, bounce);
+
+  else if (action == "Z+") moveMotor(Z_STEP, Z_DIR, HIGH, 400, spd);
+  else if (action == "Z-") moveMotor(Z_STEP, Z_DIR, LOW, 400, spd);
+
+  else if (action.startsWith("G:")) {
+    int angle = action.substring(2).toInt();
+    if (angle < 90) angle = 90;
+    if (angle > 180) angle = 180;
+    gripper.write(angle);
+  }
+
+  else if (action == "HOME") {
+    homeCoreXYAxis(LOW, LOW, X_LEFT_LIMIT, spd, bounce);
+    homeCoreXYAxis(LOW, HIGH, Y_BWD_LIMIT, spd, bounce);
   }
 }
 
-// [CoreXY 두 모터 동시 안전 구동]
-void stepDualMotorSafe(boolean dirX_val, boolean dirY_val, int steps, int limitPin) {
-  digitalWrite(dirX, dirX_val);
-  digitalWrite(dirY, dirY_val);
-  
-  for (int i = 0; i < steps; i++) {
-    // 이동 중 해당 방향 리미트 스위치가 눌리면 즉시 중단 (대기 상태 전환)
-    if (digitalRead(limitPin) == SWITCH_PRESSED) {
-      break; 
-    }
-    digitalWrite(stepX, HIGH);
-    digitalWrite(stepY, HIGH);
-    delayMicroseconds(800);
-    digitalWrite(stepX, LOW);
-    digitalWrite(stepY, LOW);
-    delayMicroseconds(800);
-  }
-}
-
-// Z축 독립 구동 함수
-void stepMotorZ(int dirPin, int stepPin, boolean dir, int steps) {
+// =====================================================================
+// 3. 단일 모터 이동
+// =====================================================================
+void moveMotor(int stepPin, int dirPin, int dir, int steps, int spd) {
   digitalWrite(dirPin, dir);
   for (int i = 0; i < steps; i++) {
     digitalWrite(stepPin, HIGH);
-    delayMicroseconds(1500);
+    delayMicroseconds(spd);
     digitalWrite(stepPin, LOW);
-    delayMicroseconds(1500);
+    delayMicroseconds(spd);
   }
 }
 
-// [CoreXY 및 4방향 리미트 스위치 기반 원점 복귀(Homing) 함수]
-void executeHoming() {
-  // Step 1. Y축 원점 복귀 (Y- 방향: X=HIGH, Y=LOW)
-  digitalWrite(dirX, HIGH);
-  digitalWrite(dirY, LOW);
-  int timeoutY = 0;
-  while (digitalRead(limitY_Home) == SWITCH_RELEASED && timeoutY < 10000) {
-    digitalWrite(stepX, HIGH);
-    digitalWrite(stepY, HIGH);
-    delayMicroseconds(800);
-    digitalWrite(stepX, LOW);
-    digitalWrite(stepY, LOW);
-    delayMicroseconds(800);
-    timeoutY++;
-  }
-  
-  // Y축 스위치 텐션 해제 (Y+ 방향으로 미세 이동하여 스위치 떨어뜨리기)
-  digitalWrite(dirX, LOW);
-  digitalWrite(dirY, HIGH);
-  for (int i = 0; i < 35; i++) {
-    digitalWrite(stepX, HIGH);
-    digitalWrite(stepY, HIGH);
-    delayMicroseconds(800);
-    digitalWrite(stepX, LOW);
-    digitalWrite(stepY, LOW);
-    delayMicroseconds(800);
-  }
-  delay(500);
+// =====================================================================
+// 4. CoreXY 전용 동시 이동 함수 (선생님 아이디어 적용: 스턴 딜레이!)
+// =====================================================================
+void moveCoreXY(int xDir, int yDir, int steps, int spd, int targetLimitPin, int bounceSteps) {
+  digitalWrite(X_DIR, xDir);
+  digitalWrite(Y_DIR, yDir);
 
-  // Step 2. X축 원점 복귀 (X- 방향이 HIGH, HIGH로 변경되었으므로 이에 맞춤)
-  digitalWrite(dirX, HIGH);
-  digitalWrite(dirY, HIGH);
-  int timeoutX = 0;
-  while (digitalRead(limitX_Home) == SWITCH_RELEASED && timeoutX < 10000) {
-    digitalWrite(stepX, HIGH);
-    digitalWrite(stepY, HIGH);
-    delayMicroseconds(800);
-    digitalWrite(stepX, LOW);
-    digitalWrite(stepY, LOW);
-    delayMicroseconds(800);
-    timeoutX++;
+  for (int i = 0; i < steps; i++) {
+    if (digitalRead(targetLimitPin) == LOW) {
+
+      int opX = (xDir == HIGH) ? LOW : HIGH;
+      int opY = (yDir == HIGH) ? LOW : HIGH;
+      digitalWrite(X_DIR, opX);
+      digitalWrite(Y_DIR, opY);
+
+      // 1. 먼저 지정된 스텝(파이썬 설정값)만큼 살짝 물러납니다.
+      for (int j = 0; j < bounceSteps; j++) {
+        digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
+        delayMicroseconds(2000);
+        digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
+        delayMicroseconds(2000);
+      }
+
+      // 🟢 [핵심 추가] 물러난 후 0.4초(400ms) 동안 강제로 대기합니다. (스턴 효과)
+      // 이 시간 동안은 파이썬에서 날아오는 "전진" 명령이 밀려나며 무시되므로,
+      // 사용자가 다른 방향키를 누를 수 있는 여유가 생깁니다.
+      delay(400);
+
+      // 🟢 [버그 수정] 위 400ms 동안 파이썬이 계속 보낸 오래된 명령들이
+      // 시리얼 수신 버퍼에 그대로 쌓여있다가, delay가 끝나자마자 밀린 순서대로
+      // 즉시 실행되면서 스턴 효과가 무력화되는 문제가 있었다.
+      // 스턴이 끝난 시점에 버퍼에 남아있는 오래된 명령은 전부 버려서,
+      // 그 이후 사용자가 "새로" 누른 키만 반영되도록 한다.
+      while (Serial.available() > 0) {
+        Serial.read();
+      }
+
+      break; // 이동 취소
+    }
+
+    digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
+    delayMicroseconds(spd);
+    digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
+    delayMicroseconds(spd);
   }
-  
-  // X축 스위치 텐션 해제 (X+ 방향인 LOW, LOW로 미세 이동하여 스위치 떨어뜨리기)
-  digitalWrite(dirX, LOW);
-  digitalWrite(dirY, LOW);
-  for (int i = 0; i < 35; i++) {
-    digitalWrite(stepX, HIGH);
-    digitalWrite(stepY, HIGH);
-    delayMicroseconds(800);
-    digitalWrite(stepX, LOW);
-    digitalWrite(stepY, LOW);
-    delayMicroseconds(800);
+}
+
+// =====================================================================
+// 5. CoreXY 전용 원점 복귀(Homing) 함수
+// =====================================================================
+void homeCoreXYAxis(int xDir, int yDir, int targetLimitPin, int spd, int bounceSteps) {
+  digitalWrite(X_DIR, xDir);
+  digitalWrite(Y_DIR, yDir);
+
+  int homeSpd = spd + 300;
+
+  while (digitalRead(targetLimitPin) == HIGH) {
+    digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
+    delayMicroseconds(homeSpd);
+    digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
+    delayMicroseconds(homeSpd);
   }
-  
-  delay(500);
-  gripperServo.write(180); // 집게 열기
-  delay(500);
+
+  int opX = (xDir == HIGH) ? LOW : HIGH;
+  int opY = (yDir == HIGH) ? LOW : HIGH;
+  digitalWrite(X_DIR, opX);
+  digitalWrite(Y_DIR, opY);
+
+  for (int i = 0; i < bounceSteps; i++) {
+    digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
+    delayMicroseconds(2000);
+    digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
+    delayMicroseconds(2000);
+  }
 }
