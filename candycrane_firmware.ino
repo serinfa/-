@@ -120,8 +120,10 @@ void moveCoreXY(int xDir, int yDir, int steps, int spd, int targetLimitPin, int 
       digitalWrite(X_DIR, opX);
       digitalWrite(Y_DIR, opY);
 
-      // 1. 먼저 지정된 스텝(파이썬 설정값)만큼 살짝 물러납니다.
-      for (int j = 0; j < bounceSteps; j++) {
+      // 1. 스위치에서 확실히 떨어지도록, 설정된 튕김 거리보다 훨씬 크게 물러납니다.
+      // (튕김 거리가 작으면 스위치 바로 앞에서 다시 눌려 계속 덜덜거리는 것처럼 보인다)
+      int collisionBackoffSteps = bounceSteps * 4;
+      for (int j = 0; j < collisionBackoffSteps; j++) {
         digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
         delayMicroseconds(2000);
         digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
