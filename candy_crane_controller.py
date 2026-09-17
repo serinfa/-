@@ -71,10 +71,6 @@ class CandyRobotApp:
         self.root.title(WINDOW_TITLE)
         self.root.geometry(WINDOW_SIZE)
         self.root.minsize(*WINDOW_MIN_SIZE)
-        try:
-            self.root.attributes("-zoomed", True)
-        except tk.TclError:
-            pass
 
         # 집게 각도 설정
         self.is_gripper_closed = False
@@ -109,6 +105,16 @@ class CandyRobotApp:
         self.video_thread = threading.Thread(target=self.video_loop, daemon=True)
         self.video_thread.start()
         self.root.after(VIDEO_LOOP_INTERVAL_MS, self.refresh_canvas)
+
+        # 창이 정상 크기로 한 번 그려진 뒤에 최대화를 시도한다.
+        # (그려지기 전에 호출하면 일부 창 관리자에서 레이아웃이 깨질 수 있다)
+        self.root.after_idle(self._maximize_window)
+
+    def _maximize_window(self):
+        try:
+            self.root.attributes("-zoomed", True)
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------------
     # UI 구성
