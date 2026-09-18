@@ -122,9 +122,13 @@ bool isLimitPressed(int pin) {
 // 4. CoreXY 전용 동시 이동 함수 (수동 조작 - 튕김 제로, 즉시 정지)
 // =====================================================================
 void moveCoreXY(int xDir, int yDir, int steps, int spd, int targetLimitPin) {
-  // 이미 스위치가 눌려있다면, 밀려있는 명령을 버리고 그 자리에서 무시(return)
+  // 🟢 [버그 수정] 예전 버전(스턴 딜레이 방식)에서 넘어온 시리얼 버퍼 비우기를
+  // 여기서는 뺐다. 지금은 이동 없이 즉시 return하므로 "밀린 같은 방향 명령"이
+  // 남아있어도 물리적으로 아무 문제가 없는데, 버퍼를 통째로 비우면 그 순간
+  // 막 도착한 "반대 방향" 명령까지 같이 버려져서 반대편으로 전혀 움직이지
+  // 못하는 문제가 있었다.
+  // 이미 스위치가 눌려있다면 그 자리에서 무시(return)
   if (isLimitPressed(targetLimitPin)) {
-    while (Serial.available() > 0) Serial.read();
     return;
   }
 
@@ -134,7 +138,6 @@ void moveCoreXY(int xDir, int yDir, int steps, int spd, int targetLimitPin) {
   for (int i = 0; i < steps; i++) {
     // 이동 중에 스위치에 부딪히면 튕기지 않고 그 자리에 즉시 정지
     if (isLimitPressed(targetLimitPin)) {
-      while (Serial.available() > 0) Serial.read();
       return;
     }
 
