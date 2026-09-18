@@ -48,7 +48,7 @@ void loop() {
 }
 
 // =====================================================================
-// 2. 명령어 해독 (속도와 튕김 거리 분리)
+// 2. 명령어 해독
 // =====================================================================
 void executeCommand(String cmd) {
   if (cmd == "STOP" || cmd == "STOP_XY") {
@@ -71,10 +71,11 @@ void executeCommand(String cmd) {
     spd = cmd.substring(firstUnder + 1).toInt();
   }
 
-  if (action == "X-")      moveCoreXY(LOW, LOW, 200, spd, X_LEFT_LIMIT, bounce);
-  else if (action == "X+") moveCoreXY(HIGH, HIGH, 200, spd, X_RIGHT_LIMIT, bounce);
-  else if (action == "Y-") moveCoreXY(LOW, HIGH, 200, spd, Y_BWD_LIMIT, bounce);
-  else if (action == "Y+") moveCoreXY(HIGH, LOW, 200, spd, Y_FWD_LIMIT, bounce);
+  // 🟢 [핵심] 수동 조작(moveCoreXY) 시에는 더 이상 bounce 값을 넘겨주지 않습니다!
+  if (action == "X-")      moveCoreXY(LOW, LOW, 200, spd, X_LEFT_LIMIT);
+  else if (action == "X+") moveCoreXY(HIGH, HIGH, 200, spd, X_RIGHT_LIMIT);
+  else if (action == "Y-") moveCoreXY(LOW, HIGH, 200, spd, Y_BWD_LIMIT);
+  else if (action == "Y+") moveCoreXY(HIGH, LOW, 200, spd, Y_FWD_LIMIT);
 
   else if (action == "Z+") moveMotor(Z_STEP, Z_DIR, HIGH, 400, spd);
   else if (action == "Z-") moveMotor(Z_STEP, Z_DIR, LOW, 400, spd);
@@ -87,13 +88,14 @@ void executeCommand(String cmd) {
   }
 
   else if (action == "HOME") {
+    // HOME 기능은 기계 영점을 잡아야 하므로 튕김(bounce)과 더블 터치를 그대로 사용합니다.
     homeCoreXYAxis(LOW, LOW, X_LEFT_LIMIT, spd, bounce);
     homeCoreXYAxis(LOW, HIGH, Y_BWD_LIMIT, spd, bounce);
   }
 }
 
 // =====================================================================
-// 3. 단일 모터 이동
+// 3. 단일 모터 이동 (Z축 상하)
 // =====================================================================
 void moveMotor(int stepPin, int dirPin, int dir, int steps, int spd) {
   digitalWrite(dirPin, dir);
@@ -106,45 +108,23 @@ void moveMotor(int stepPin, int dirPin, int dir, int steps, int spd) {
 }
 
 // =====================================================================
-// 4. CoreXY 전용 동시 이동 함수 (선생님 아이디어 적용: 스턴 딜레이!)
+// 4. CoreXY 전용 동시 이동 함수 (수동 조작 - 튕김 제로, 즉시 정지)
 // =====================================================================
-void moveCoreXY(int xDir, int yDir, int steps, int spd, int targetLimitPin, int bounceSteps) {
+void moveCoreXY(int xDir, int yDir, int steps, int spd, int targetLimitPin) {
+  // 이미 스위치가 눌려있다면(LOW), 밀려있는 명령을 버리고 그 자리에서 무시(return)
+  if (digitalRead(targetLimitPin) == LOW) {
+    while (Serial.available() > 0) Serial.read();
+    return;
+  }
+
   digitalWrite(X_DIR, xDir);
   digitalWrite(Y_DIR, yDir);
 
   for (int i = 0; i < steps; i++) {
+    // 이동 중에 스위치에 부딪히면 튕기지 않고 그 자리에 즉시 정지
     if (digitalRead(targetLimitPin) == LOW) {
-
-      int opX = (xDir == HIGH) ? LOW : HIGH;
-      int opY = (yDir == HIGH) ? LOW : HIGH;
-      digitalWrite(X_DIR, opX);
-      digitalWrite(Y_DIR, opY);
-
-      // 1. 스위치에서 확실히 떨어지도록, 설정된 튕김 거리보다 훨씬 크게 물러납니다.
-      // (튕김 거리가 작으면 스위치 바로 앞에서 다시 눌려 계속 덜덜거리는 것처럼 보인다)
-      int collisionBackoffSteps = bounceSteps * 4;
-      for (int j = 0; j < collisionBackoffSteps; j++) {
-        digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
-        delayMicroseconds(2000);
-        digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
-        delayMicroseconds(2000);
-      }
-
-      // 🟢 [핵심 추가] 물러난 후 0.4초(400ms) 동안 강제로 대기합니다. (스턴 효과)
-      // 이 시간 동안은 파이썬에서 날아오는 "전진" 명령이 밀려나며 무시되므로,
-      // 사용자가 다른 방향키를 누를 수 있는 여유가 생깁니다.
-      delay(400);
-
-      // 🟢 [버그 수정] 위 400ms 동안 파이썬이 계속 보낸 오래된 명령들이
-      // 시리얼 수신 버퍼에 그대로 쌓여있다가, delay가 끝나자마자 밀린 순서대로
-      // 즉시 실행되면서 스턴 효과가 무력화되는 문제가 있었다.
-      // 스턴이 끝난 시점에 버퍼에 남아있는 오래된 명령은 전부 버려서,
-      // 그 이후 사용자가 "새로" 누른 키만 반영되도록 한다.
-      while (Serial.available() > 0) {
-        Serial.read();
-      }
-
-      break; // 이동 취소
+      while (Serial.available() > 0) Serial.read();
+      return;
     }
 
     digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
@@ -155,30 +135,46 @@ void moveCoreXY(int xDir, int yDir, int steps, int spd, int targetLimitPin, int 
 }
 
 // =====================================================================
-// 5. CoreXY 전용 원점 복귀(Homing) 함수
+// 5. CoreXY 전용 원점 복귀(Homing) 함수 (더블 터치 유지)
 // =====================================================================
 void homeCoreXYAxis(int xDir, int yDir, int targetLimitPin, int spd, int bounceSteps) {
-  digitalWrite(X_DIR, xDir);
-  digitalWrite(Y_DIR, yDir);
-
-  int homeSpd = spd + 300;
-
-  while (digitalRead(targetLimitPin) == HIGH) {
-    digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
-    delayMicroseconds(homeSpd);
-    digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
-    delayMicroseconds(homeSpd);
-  }
-
   int opX = (xDir == HIGH) ? LOW : HIGH;
   int opY = (yDir == HIGH) ? LOW : HIGH;
+  int homeFastSpd = spd + 300;
+
+  digitalWrite(X_DIR, xDir);
+  digitalWrite(Y_DIR, yDir);
+  while (digitalRead(targetLimitPin) == HIGH) {
+    digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
+    delayMicroseconds(homeFastSpd);
+    digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
+    delayMicroseconds(homeFastSpd);
+  }
+
   digitalWrite(X_DIR, opX);
   digitalWrite(Y_DIR, opY);
-
-  for (int i = 0; i < bounceSteps; i++) {
+  for (int i = 0; i < 30; i++) {
     digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
     delayMicroseconds(2000);
     digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
     delayMicroseconds(2000);
+  }
+
+  digitalWrite(X_DIR, xDir);
+  digitalWrite(Y_DIR, yDir);
+  while (digitalRead(targetLimitPin) == HIGH) {
+    digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
+    delayMicroseconds(4000);
+    digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
+    delayMicroseconds(4000);
+  }
+
+  digitalWrite(X_DIR, opX);
+  digitalWrite(Y_DIR, opY);
+  for (int i = 0; i < bounceSteps; i++) {
+    digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
+    delayMicroseconds(4000);
+    digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
+    delayMicroseconds(4000);
   }
 }
