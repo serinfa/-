@@ -188,7 +188,10 @@ class CandyRobotApp:
         self.btn_joy_fw.grid(row=0, column=1, pady=2)
         self.btn_joy_l = tk.Button(joy_grid, text=f"좌측[{self.key_left.get()}]", command=lambda: self.execute_hardware_cmd("X-"), **j_style)
         self.btn_joy_l.grid(row=1, column=0, padx=2)
-        self.btn_joy_stop = tk.Button(joy_grid, text=f"정지[{self.key_stop.get()}]", command=lambda: self.execute_hardware_cmd("STOP_XY"), bg="#F44336", fg="white", font=("맑은 고딕", 9, "bold"), width=11, relief="raised", bd=3)
+        # 🟢 [버그 수정] execute_hardware_cmd("STOP_XY")만 보내면 아두이노에서 아무 동작도 안 하는
+        # 명령(no-op)이라 실제로는 아무것도 멈추지 않았다. on_end()를 호출해 session_active를
+        # 꺼서 자동 추적/수동 키 입력이 더 이상 명령을 보내지 않도록 확실히 정지시킨다.
+        self.btn_joy_stop = tk.Button(joy_grid, text=f"정지[{self.key_stop.get()}]", command=lambda: self.on_end(), bg="#F44336", fg="white", font=("맑은 고딕", 9, "bold"), width=11, relief="raised", bd=3)
         self.btn_joy_stop.grid(row=1, column=1, padx=2)
         self.btn_joy_r = tk.Button(joy_grid, text=f"우측[{self.key_right.get()}]", command=lambda: self.execute_hardware_cmd("X+"), **j_style)
         self.btn_joy_r.grid(row=1, column=2, padx=2)
@@ -383,8 +386,10 @@ class CandyRobotApp:
 
     def on_keyboard_press(self, event):
         if event.keysym.upper() == "SPACE" or event.keysym.upper() == self.key_stop.get().upper():
-            self.execute_hardware_cmd("STOP_XY")
-            if self.control_mode.get() == "AUTO": self.on_end()
+            # 🟢 [버그 수정] 모드(자동/수동)와 상관없이 정지는 항상 세션을 완전히 끝내야 한다.
+            # 이전에는 자동 모드일 때만 on_end()를 호출해서, 수동 모드에서 정지를 눌러도
+            # session_active가 꺼지지 않아 계속 눌려있는 키 입력이 명령을 보내고 있었다.
+            self.on_end()
             return
 
         if self.is_emergency_stop or not self.session_active or self.control_mode.get() == "AUTO": return

@@ -107,12 +107,23 @@ void moveMotor(int stepPin, int dirPin, int dir, int steps, int spd) {
   }
 }
 
+// 🟢 [버그 수정] 리미트 스위치는 접점 특성상 눌리는 순간 전기적으로 짧게 떨린다(채터링).
+// 디바운스 없이 digitalRead()만 보면 한 번 부딪힌 것이 여러 번 눌렸다 떨어진 것처럼
+// 읽혀서 "즉시 정지 -> (채터링으로 순간 HIGH로 오독) -> 한 스텝 더 이동 -> 다시 정지"가
+// 반복되며 마치 계속 튕기는 것처럼 보일 수 있다. LOW로 읽히면 아주 짧게 대기한 뒤
+// 한 번 더 확인해서, 진짜로 눌린 것만 "눌림"으로 인정한다.
+bool isLimitPressed(int pin) {
+  if (digitalRead(pin) != LOW) return false;
+  delayMicroseconds(500);
+  return digitalRead(pin) == LOW;
+}
+
 // =====================================================================
 // 4. CoreXY 전용 동시 이동 함수 (수동 조작 - 튕김 제로, 즉시 정지)
 // =====================================================================
 void moveCoreXY(int xDir, int yDir, int steps, int spd, int targetLimitPin) {
-  // 이미 스위치가 눌려있다면(LOW), 밀려있는 명령을 버리고 그 자리에서 무시(return)
-  if (digitalRead(targetLimitPin) == LOW) {
+  // 이미 스위치가 눌려있다면, 밀려있는 명령을 버리고 그 자리에서 무시(return)
+  if (isLimitPressed(targetLimitPin)) {
     while (Serial.available() > 0) Serial.read();
     return;
   }
@@ -122,7 +133,7 @@ void moveCoreXY(int xDir, int yDir, int steps, int spd, int targetLimitPin) {
 
   for (int i = 0; i < steps; i++) {
     // 이동 중에 스위치에 부딪히면 튕기지 않고 그 자리에 즉시 정지
-    if (digitalRead(targetLimitPin) == LOW) {
+    if (isLimitPressed(targetLimitPin)) {
       while (Serial.available() > 0) Serial.read();
       return;
     }
@@ -144,7 +155,7 @@ void homeCoreXYAxis(int xDir, int yDir, int targetLimitPin, int spd, int bounceS
 
   digitalWrite(X_DIR, xDir);
   digitalWrite(Y_DIR, yDir);
-  while (digitalRead(targetLimitPin) == HIGH) {
+  while (!isLimitPressed(targetLimitPin)) {
     digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
     delayMicroseconds(homeFastSpd);
     digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
@@ -162,7 +173,7 @@ void homeCoreXYAxis(int xDir, int yDir, int targetLimitPin, int spd, int bounceS
 
   digitalWrite(X_DIR, xDir);
   digitalWrite(Y_DIR, yDir);
-  while (digitalRead(targetLimitPin) == HIGH) {
+  while (!isLimitPressed(targetLimitPin)) {
     digitalWrite(X_STEP, HIGH); digitalWrite(Y_STEP, HIGH);
     delayMicroseconds(4000);
     digitalWrite(X_STEP, LOW);  digitalWrite(Y_STEP, LOW);
